@@ -12,7 +12,7 @@ class SSEManager {
     final SSEHandler _sseHandler = SSEHandler('$url/events?deviceId=$deviceId');
 
     _sseHandler.startListening();
-    print('SSE started listening for events.............................');
+    print('SSE started listening for events.............................deviceId=$deviceId');
 
     _sseHandler.stream.listen((data) async {
       try {

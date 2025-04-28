@@ -4,18 +4,7 @@ import 'package:sqflite/sqflite.dart';
 class TriggerManager {
   static Future<void> setupTriggers() async {
     final Database db = await DBHelper.db;
-
-    // Ensure tbldmlog table exists
-    await db.execute('''
-      CREATE TABLE IF NOT EXISTS tbldmlog (
-        TXID INTEGER,
-        TableName TEXT NOT NULL,
-        PK INTEGER NOT NULL,
-        Action INTEGER,
-        PayLoad TEXT,
-        timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
-      );
-    ''');
+    print("🔄 Setting up triggers...");
 
     // Get all tables except system tables and tbldmlog
     List<Map<String, dynamic>> tables = await db.rawQuery('''

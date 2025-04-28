@@ -1,23 +1,41 @@
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:sqflite/sqflite.dart';
 import 'package:path/path.dart';
+import 'dart:async';
 
 class DBHelper {
   static Database? _db;
+  static String? _currentDbName;
   static final FlutterSecureStorage _secureStorage = FlutterSecureStorage();
+
   static Future<Database> get db async {
-    if (_db != null) return _db!;
+    String newDbName = await _getDatabaseName();
+    if (_db != null && _currentDbName == newDbName) return _db!;
+
+    // Close the existing database if the name has changed
+    if (_db != null && _currentDbName != newDbName) {
+      await _db!.close();
+      _db = null;
+    }
+
+    _currentDbName = newDbName;
     _db = await _initDB();
     return _db!;
   }
 
   static Future<int> _getDeviceId() async {
     String? deviceId = await _secureStorage.read(key: "DeviceId");
-    return int.tryParse(deviceId ?? '') ?? 123456;
+    if (deviceId == null || deviceId.isEmpty) {
+      print("Device ID is not set in secure storage.");
+      // throw Exception("Device ID is not set in secure storage.");
+    }
+    return int.parse(deviceId!);
   }
 
   static Future<String> _getDatabaseName() async {
-    String? dbName = await _secureStorage.read(key: "DatabaseName");
+    String? databaseName = await _secureStorage.read(key: "DatabaseName");
+    String? dbName = databaseName?.replaceAll("@", "_").replaceAll(".", "_");
+    print("DB Name: $dbName" );
     if (dbName == null || dbName.isEmpty) {
       return "app.db"; // Default DB name
     }
@@ -39,8 +57,7 @@ class DBHelper {
             TableName TEXT NOT NULL,
             PK INTEGER NOT NULL,
             Action INTEGER,
-            PayLoad TEXT,
-            timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
+            PayLoad TEXT
           );
         ''');
       },
