@@ -1,12 +1,37 @@
+// import 'package:flutter/services.dart';
 // import 'package:flutter_test/flutter_test.dart';
-
-// import 'package:sqllite_sdk/sqllite_sdk.dart';
+// import 'package:tenant_replication/tenant_replication.dart';
 
 // void main() {
-//   test('adds one to input values', () {
-//     final calculator = Calculator();
-//     expect(calculator.addOne(2), 3);
-//     expect(calculator.addOne(-7), -6);
-//     expect(calculator.addOne(0), 1);
+//   // Must be first
+//   TestWidgetsFlutterBinding.ensureInitialized();
+
+//   const MethodChannel channel = MethodChannel(
+//     'plugins.it_nomads.com/flutter_secure_storage',
+//   );
+
+//   setUp(() {
+//     // Mock the secure storage plugin methods
+//     channel.setMockMethodCallHandler((MethodCall methodCall) async {
+//       switch (methodCall.method) {
+//         case 'read':
+//           return '6556011';
+//         case 'write':
+//         case 'delete':
+//         case 'deleteAll':
+//           return null;
+//         default:
+//           return null;
+//       }
+//     });
+//   });
+
+//   tearDown(() {
+//     channel.setMockMethodCallHandler(null);
+//   });
+
+//   test('testing code..........', () async {
+//     await SSEManager.initializeSSE('http://192.168.0.87:3000');
+//     expect(true, true);
 //   });
 // }
