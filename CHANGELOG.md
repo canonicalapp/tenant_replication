@@ -1,3 +1,5 @@
-## 0.0.1
+## 0.0.3
 
-* TODO: Describe initial release.
+- Fixed bug with SSE handler
+- Improved sync_manager performance
+
