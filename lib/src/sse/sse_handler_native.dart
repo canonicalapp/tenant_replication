@@ -4,6 +4,7 @@ import 'package:eventsource/eventsource.dart';
 
 class SSEHandler {
   final String url;
+  final Map<String, String>? headers;
   final StreamController<String> _controller = StreamController<String>();
   EventSource? _eventSource;
   StreamSubscription<Event>? _subscription;
@@ -11,14 +12,22 @@ class SSEHandler {
   bool _isReconnecting = false;
   int _retryDelay = 5000; // Initial retry delay in milliseconds
 
-  SSEHandler(this.url);
+  SSEHandler(this.url, {this.headers});
 
   Stream<String> get stream => _controller.stream;
 
   void startListening() async {
     try {
       print("Connecting to SSE...");
-      _eventSource = await EventSource.connect(url);
+      // print("URL: $url");
+      // print("Headers: $headers");
+      
+      // Connect with or without headers based on availability
+      if (headers != null && headers!.isNotEmpty) {
+        _eventSource = await EventSource.connect(url, headers: headers);
+      } else {
+        _eventSource = await EventSource.connect(url);
+      }
       print("Connected to SSE");
 
       // Reset retry delay on successful connection
@@ -41,6 +50,9 @@ class SSEHandler {
       _monitorNetworkConnectivity();
     } catch (e) {
       print('Error connecting to SSE: $e');
+      if (e.toString().contains('EventSourceSubscriptionException')) {
+        print('EventSourceSubscriptionException details: ${e.toString()}');
+      }
       _attemptReconnect();
     }
   }
