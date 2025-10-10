@@ -73,29 +73,37 @@ class SSEManager {
     required String url,
     required String token,
     required String tableName,
+    Map<String, dynamic>? extraParams, // 👈 optional query params
   }) async {
     final String? deviceId = await _secureStorage.read(key: "DeviceId");
     final lastUpdated = await getMaxLastUpdated(tableName);
+
     try {
       _dio.options.headers.addAll({
         "Authorization": "Bearer $token",
         "Accept": "application/json",
       });
 
+      // Base query parameters
+      final queryParams = {
+        "tableName": tableName,
+        "lastUpdated": lastUpdated ?? 0,
+        "deviceId": deviceId,
+      };
+
+      // Add extra params if provided
+      if (extraParams != null && extraParams.isNotEmpty) {
+        queryParams.addAll(extraParams);
+      }
+
       final response = await _dio.get(
         url,
-        queryParameters: {
-          "tableName": tableName,
-          "lastUpdated": lastUpdated ?? 0,
-          "deviceId": deviceId,
-        },
+        queryParameters: queryParams,
       );
 
       if (response.statusCode == 200) {
-        // print("✅ load data for table $tableName : ${response.data}");
         final db = await DBHelper.db;
 
-        // 🔹 Get valid columns for this table
         final validCols = await getTableColumns(db, tableName);
 
         if (response.data is List) {
@@ -135,7 +143,7 @@ class SSEManager {
       rethrow;
     }
   }
-
+  
   static Future<int?> getMaxLastUpdated(String tableName) async {
     final db = await DBHelper.db;
     final result = await db.rawQuery(
