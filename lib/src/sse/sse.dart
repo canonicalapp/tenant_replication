@@ -87,7 +87,7 @@ class SSEManager {
       // Base query parameters
       final queryParams = {
         "tableName": tableName,
-        "lastUpdated": lastUpdated ?? 0,
+        "lastUpdated": lastUpdated ?? 1,
         "deviceId": deviceId,
       };
 
