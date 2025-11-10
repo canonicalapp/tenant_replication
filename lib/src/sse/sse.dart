@@ -147,7 +147,7 @@ class SSEManager {
   static Future<int?> getMaxLastUpdated(String tableName) async {
     final db = await DBHelper.db;
     final result = await db.rawQuery(
-      "SELECT MAX(lastupdated) as maxVal FROM $tableName",
+      "SELECT MAX(mtds_lastUpdatedTxid) as maxVal FROM $tableName",
     );
 
     if (result.isNotEmpty && result.first["maxVal"] != null) {
