@@ -96,10 +96,7 @@ class SSEManager {
         queryParams.addAll(extraParams);
       }
 
-      final response = await _dio.get(
-        url,
-        queryParameters: queryParams,
-      );
+      final response = await _dio.get(url, queryParameters: queryParams);
 
       if (response.statusCode == 200) {
         final db = await DBHelper.db;
@@ -143,7 +140,7 @@ class SSEManager {
       rethrow;
     }
   }
-  
+
   static Future<int?> getMaxLastUpdated(String tableName) async {
     final db = await DBHelper.db;
     final result = await db.rawQuery(
@@ -156,34 +153,37 @@ class SSEManager {
     return null;
   }
 
-  static Future<Set<String>> getTableColumns(Database db, String tableName) async {
+  static Future<Set<String>> getTableColumns(
+    Database db,
+    String tableName,
+  ) async {
     final result = await db.rawQuery("PRAGMA table_info($tableName)");
     return result.map((row) => row["name"] as String).toSet();
   }
 
   static Map<String, dynamic> filterRow(
-  Map<String, dynamic> row,
-  Set<String> validCols,
-) {
-  final filtered = <String, dynamic>{};
+    Map<String, dynamic> row,
+    Set<String> validCols,
+  ) {
+    final filtered = <String, dynamic>{};
 
-  row.forEach((key, value) {
-    if (validCols.contains(key)) {
-      if (value is bool) {
-        filtered[key] = value ? 1 : 0; // SQLite stores bool as 0/1
-      } else if (value is Map) {
-        // 👇 Fix: convert Map (like {type: Buffer, data: [...]}) to JSON string
-        filtered[key] = jsonEncode(value);
-      } else if (value is List) {
-        filtered[key] = jsonEncode(value);
-      } else {
-        filtered[key] = value;
+    row.forEach((key, value) {
+      if (validCols.contains(key)) {
+        if (value is bool) {
+          filtered[key] = value ? 1 : 0; // SQLite stores bool as 0/1
+        } else if (value is Map) {
+          // 👇 Fix: convert Map (like {type: Buffer, data: [...]}) to JSON string
+          filtered[key] = jsonEncode(value);
+        } else if (value is List) {
+          filtered[key] = jsonEncode(value);
+        } else {
+          filtered[key] = value;
+        }
       }
-    }
-  });
+    });
 
-  return filtered;
-}
+    return filtered;
+  }
 
   // static Map<String, dynamic> filterRow(
   //   Map<String, dynamic> row,

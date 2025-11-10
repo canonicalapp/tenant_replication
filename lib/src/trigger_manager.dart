@@ -45,11 +45,17 @@ class TriggerManager {
 
       try {
         // INSERT Trigger
+        // Check 48-bit DeviceID by comparing both parts:
+        // - LS 32 bits against application_id
+        // - MS 16 bits against user_version & 0xFFFF
         await db.execute('''
           CREATE TRIGGER IF NOT EXISTS trigger_${tableName}_insert
           AFTER INSERT ON $tableName
           FOR EACH ROW
-          WHEN NEW.mtds_DeviceID = (SELECT application_id FROM pragma_application_id())
+          WHEN (
+            (NEW.mtds_DeviceID & 0xFFFFFFFF) = (SELECT application_id FROM pragma_application_id())
+            AND ((NEW.mtds_DeviceID >> 32) & 0xFFFF) = ((SELECT user_version FROM pragma_user_version()) & 0xFFFF)
+          )
           BEGIN
               INSERT INTO tbldmlog (TXID, TableName, PK, mtds_DeviceID, Action, PayLoad)
               VALUES (
@@ -64,6 +70,9 @@ class TriggerManager {
         ''');
 
         // UPDATE Trigger
+        // Check 48-bit DeviceID by comparing both parts:
+        // - LS 32 bits against application_id
+        // - MS 16 bits against user_version & 0xFFFF
         await db.execute('''
           CREATE TRIGGER IF NOT EXISTS trigger_${tableName}_update
           AFTER UPDATE ON $tableName
@@ -71,13 +80,15 @@ class TriggerManager {
           WHEN (
             (
               OLD.mtds_lastUpdatedTxid <> NEW.mtds_lastUpdatedTxid 
-              AND NEW.mtds_DeviceID = (SELECT application_id FROM pragma_application_id())
+              AND (NEW.mtds_DeviceID & 0xFFFFFFFF) = (SELECT application_id FROM pragma_application_id())
+              AND ((NEW.mtds_DeviceID >> 32) & 0xFFFF) = ((SELECT user_version FROM pragma_user_version()) & 0xFFFF)
             )
             OR
             (
               OLD.mtds_DeletedTXID IS NULL 
               AND NEW.mtds_DeletedTXID IS NOT NULL 
-              AND NEW.mtds_DeviceID = (SELECT application_id FROM pragma_application_id())
+              AND (NEW.mtds_DeviceID & 0xFFFFFFFF) = (SELECT application_id FROM pragma_application_id())
+              AND ((NEW.mtds_DeviceID >> 32) & 0xFFFF) = ((SELECT user_version FROM pragma_user_version()) & 0xFFFF)
             )
           )
           BEGIN

@@ -12,6 +12,72 @@ class DBHelper {
   static String? _currentDbName;
   static final FlutterSecureStorage _secureStorage = FlutterSecureStorage();
 
+  // Constants
+  static const int _appVersion = 1; // Application schema version
+
+  /// Pack App Version (16 bits) and MS 16 bits of DeviceID (48 bits total) into user_version (32 bits)
+  /// Layout: [App Version: 16 bits][DeviceID MS 16 bits: 16 bits]
+  static int packUserVersion(int appVersion, int deviceId) {
+    // Mask to 16 bits each
+    final appVersionMasked = appVersion & 0xFFFF;
+    final deviceIdMS16 =
+        (deviceId >> 32) & 0xFFFF; // Get MS 16 bits of 48-bit DeviceID
+
+    // Pack: [App Version][DeviceID MS 16 bits]
+    return (appVersionMasked << 16) | deviceIdMS16;
+  }
+
+  /// Pack LS 32 bits of DeviceID (48 bits total) into application_id (32 bits)
+  /// Layout: [DeviceID LS 32 bits: 32 bits]
+  static int packApplicationId(int deviceId) {
+    // Get LS 32 bits of 48-bit DeviceID
+    return deviceId & 0xFFFFFFFF;
+  }
+
+  /// Unpack user_version to extract App Version (16 bits)
+  static int unpackAppVersion(int userVersion) {
+    return (userVersion >> 16) & 0xFFFF;
+  }
+
+  /// Unpack user_version to extract MS 16 bits of DeviceID
+  static int unpackDeviceIdMS16(int userVersion) {
+    return userVersion & 0xFFFF;
+  }
+
+  /// Reconstruct 48-bit DeviceID from user_version and application_id
+  static int reconstructDeviceId(int userVersion, int applicationId) {
+    final deviceIdMS16 = unpackDeviceIdMS16(userVersion);
+    final deviceIdLS32 = applicationId & 0xFFFFFFFF;
+
+    // Reconstruct: [MS 16 bits][LS 32 bits]
+    return (deviceIdMS16 << 32) | deviceIdLS32;
+  }
+
+  /// Generate 64-bit nanosecond timestamp since epoch
+  static int generateNanosecondTimestamp() {
+    final now = DateTime.now();
+    // Get microseconds since epoch and convert to nanoseconds
+    return now.microsecondsSinceEpoch * 1000;
+  }
+
+  /// Get DeviceID as 48-bit integer (supports MAC addresses)
+  static Future<int> getDeviceId48Bit() async {
+    String? deviceId = await _secureStorage.read(key: "DeviceId");
+    if (deviceId == null || deviceId.isEmpty) {
+      print("Device ID is not set in secure storage.");
+      throw Exception("Device ID is not set in secure storage.");
+    }
+
+    final id = int.parse(deviceId);
+
+    // Ensure it fits in 48 bits (max value: 281474976710655)
+    if (id > 0xFFFFFFFFFFFF) {
+      throw Exception("DeviceID exceeds 48-bit limit: $id");
+    }
+
+    return id;
+  }
+
   static Future<Database> get db async {
     String newDbName = await _getDatabaseName();
     if (_db != null && _currentDbName == newDbName) return _db!;
@@ -25,15 +91,6 @@ class DBHelper {
     _currentDbName = newDbName;
     _db = await _initDB();
     return _db!;
-  }
-
-  static Future<int> _getDeviceId() async {
-    String? deviceId = await _secureStorage.read(key: "DeviceId");
-    if (deviceId == null || deviceId.isEmpty) {
-      print("Device ID is not set in secure storage.");
-      // throw Exception("Device ID is not set in secure storage.");
-    }
-    return int.parse(deviceId!);
   }
 
   /// Extract tenant ID from secure storage
@@ -106,7 +163,7 @@ class DBHelper {
   }
 
   static Future<Database> _initDB() async {
-    int deviceId = await _getDeviceId();
+    final deviceId48 = await getDeviceId48Bit();
     String dbName = await _getDatabaseName();
 
     // Use path_provider to get app's support directory
@@ -135,8 +192,30 @@ class DBHelper {
     // Disable foreign keys for replication to work properly
     await database.execute("PRAGMA foreign_keys = OFF;");
 
-    // Execute PRAGMA statement after the DB is initialized
-    await database.execute("PRAGMA application_id = $deviceId;");
+    // Pack and set user_version (App Version + MS 16 bits of DeviceID)
+    final packedUserVersion = packUserVersion(_appVersion, deviceId48);
+    await database.execute("PRAGMA user_version = $packedUserVersion;");
+
+    print(
+      "📊 user_version set: $packedUserVersion (App: $_appVersion, DeviceID MS16: ${unpackDeviceIdMS16(packedUserVersion)})",
+    );
+
+    // Pack and set application_id (LS 32 bits of DeviceID)
+    final packedAppId = packApplicationId(deviceId48);
+    await database.execute("PRAGMA application_id = $packedAppId;");
+    print("📊 application_id set: $packedAppId (DeviceID LS32)");
+
+    // Verify reconstruction
+    final reconstructed = reconstructDeviceId(packedUserVersion, packedAppId);
+    print(
+      "✅ DeviceID verification: Original=$deviceId48, Reconstructed=$reconstructed",
+    );
+
+    if (reconstructed != deviceId48) {
+      throw Exception(
+        "DeviceID packing/unpacking failed! Original: $deviceId48, Reconstructed: $reconstructed",
+      );
+    }
 
     return database;
   }
