@@ -60,6 +60,80 @@ class DBHelper {
     return now.microsecondsSinceEpoch * 1000;
   }
 
+  /// Generate mtds_lastUpdatedTxid value (nanosecond timestamp)
+  /// This should be used when creating or updating records
+  static int generateTxid() {
+    return generateNanosecondTimestamp();
+  }
+
+  /// Perform a soft delete on a record
+  /// Sets mtds_DeletedTXID to mark for deletion
+  /// The record will be replicated to server and then deleted locally on sync confirmation
+  static Future<void> softDelete({
+    required String tableName,
+    required String primaryKeyColumn,
+    required dynamic primaryKeyValue,
+  }) async {
+    final db = await DBHelper.db;
+    final deviceId = await getDeviceId48Bit();
+    final deletedTxid = generateTxid();
+
+    await db.update(
+      tableName,
+      {'mtds_DeletedTXID': deletedTxid, 'mtds_DeviceID': deviceId},
+      where: '$primaryKeyColumn = ?',
+      whereArgs: [primaryKeyValue],
+    );
+
+    print(
+      "🗑️ Soft delete: $tableName[$primaryKeyColumn=$primaryKeyValue] marked with DeletedTXID=$deletedTxid",
+    );
+  }
+
+  /// Perform a hard delete on a record
+  /// Directly deletes from table without replication
+  /// Use this for local-only deletions that should NOT sync to server
+  static Future<void> hardDelete({
+    required String tableName,
+    required String primaryKeyColumn,
+    required dynamic primaryKeyValue,
+  }) async {
+    final db = await DBHelper.db;
+
+    await db.delete(
+      tableName,
+      where: '$primaryKeyColumn = ?',
+      whereArgs: [primaryKeyValue],
+    );
+
+    print(
+      "🗑️ Hard delete: $tableName[$primaryKeyColumn=$primaryKeyValue] permanently removed (no replication)",
+    );
+  }
+
+  /// Get current 48-bit DeviceID from database PRAGMA values
+  static Future<int> getCurrentDeviceId() async {
+    final db = await DBHelper.db;
+
+    final userVersionResult = await db.rawQuery('PRAGMA user_version');
+    final appIdResult = await db.rawQuery('PRAGMA application_id');
+
+    final userVersion = userVersionResult.first['user_version'] as int;
+    final applicationId = appIdResult.first['application_id'] as int;
+
+    return reconstructDeviceId(userVersion, applicationId);
+  }
+
+  /// Get current app version from database PRAGMA
+  static Future<int> getCurrentAppVersion() async {
+    final db = await DBHelper.db;
+
+    final userVersionResult = await db.rawQuery('PRAGMA user_version');
+    final userVersion = userVersionResult.first['user_version'] as int;
+
+    return unpackAppVersion(userVersion);
+  }
+
   /// Get DeviceID as 48-bit integer (supports MAC addresses)
   static Future<int> getDeviceId48Bit() async {
     String? deviceId = await _secureStorage.read(key: "DeviceId");

@@ -1,5 +1,4 @@
 import 'dart:convert';
-
 import 'package:dio/dio.dart';
 import 'package:sqflite/sqflite.dart';
 import 'db_helper.dart';
@@ -8,14 +7,20 @@ class SyncManager {
   static Future<void> syncWithServer(url) async {
     final db = await DBHelper.db;
     try {
-      final List<Map<String, dynamic>> remoteUpdates = await db.query("tbldmlog");
-      await _applyServerUpdates(db, remoteUpdates,url);
+      final List<Map<String, dynamic>> remoteUpdates = await db.query(
+        "tbldmlog",
+      );
+      await _applyServerUpdates(db, remoteUpdates, url);
     } catch (e) {
       print("❌ Sync failed: $e");
     }
   }
 
-  static Future<bool> _applyServerUpdates(Database db,List<Map<String, dynamic>> updates,String url) async {
+  static Future<bool> _applyServerUpdates(
+    Database db,
+    List<Map<String, dynamic>> updates,
+    String url,
+  ) async {
     final normalizedUpdates =
         updates.map((update) {
           final normalized = Map<String, dynamic>.from(update);
@@ -48,6 +53,9 @@ class SyncManager {
         data: normalizedUpdates,
       );
       if (response.statusCode == 200) {
+        // Process soft-deletes: actually delete records marked with mtds_DeletedTXID
+        await _processConfirmedDeletes(db, normalizedUpdates);
+
         final localChanges = await db.query('tbldmlog');
         if (localChanges.isNotEmpty) {
           await db.delete('tbldmlog'); // Clear tbldmlog after successful sync
@@ -79,5 +87,64 @@ class SyncManager {
       print("‼️ Unexpected error: $e");
       return false;
     }
+  }
+
+  /// Process confirmed soft-deletes by actually deleting records from local database
+  /// This is called after server confirms the soft-delete sync
+  static Future<void> _processConfirmedDeletes(
+    Database db,
+    List<Map<String, dynamic>> updates,
+  ) async {
+    final deletesToProcess =
+        updates.where((update) {
+          // Action == null indicates a soft-delete operation
+          return update['Action'] == null;
+        }).toList();
+
+    if (deletesToProcess.isEmpty) {
+      return;
+    }
+
+    print(
+      "🗑️ Processing ${deletesToProcess.length} confirmed soft-deletes...",
+    );
+
+    for (final deleteEntry in deletesToProcess) {
+      try {
+        final tableName = deleteEntry['TableName'] as String;
+        final pk = deleteEntry['PK'];
+
+        // Get the primary key column name for this table
+        final tableInfo = await db.rawQuery('PRAGMA table_info($tableName)');
+        final pkColumn = tableInfo.firstWhere(
+          (col) => col['pk'] == 1,
+          orElse: () => {'name': 'id'},
+        );
+        final pkColumnName = pkColumn['name'] as String;
+
+        // Actually delete the record from the table
+        final deletedRows = await db.delete(
+          tableName,
+          where: '$pkColumnName = ?',
+          whereArgs: [pk],
+        );
+
+        if (deletedRows > 0) {
+          print(
+            "✅ Soft-delete confirmed: $tableName[$pkColumnName=$pk] permanently removed",
+          );
+        } else {
+          print(
+            "⚠️ Soft-delete: $tableName[$pkColumnName=$pk] not found (may have been already deleted)",
+          );
+        }
+      } catch (e) {
+        print(
+          "❌ Error processing soft-delete for ${deleteEntry['TableName']}: $e",
+        );
+      }
+    }
+
+    print("✅ Confirmed soft-deletes processed");
   }
 }

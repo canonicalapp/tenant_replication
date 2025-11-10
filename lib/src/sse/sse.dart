@@ -69,6 +69,53 @@ class SSEManager {
     });
   }
 
+  /// Load all tables sequentially on system start
+  /// Each table is loaded in its own transaction
+  Future<Map<String, int>> loadAllTables({
+    required String url,
+    required String token,
+    required List<String> tableNames,
+    Map<String, dynamic>? extraParams,
+  }) async {
+    final results = <String, int>{};
+
+    print("🔄 Starting initial data load for ${tableNames.length} tables...");
+
+    for (final tableName in tableNames) {
+      try {
+        print("📋 Loading table: $tableName");
+        final data = await loadData(
+          url: url,
+          token: token,
+          tableName: tableName,
+          extraParams: extraParams,
+        );
+
+        final count = data is List ? data.length : 1;
+        results[tableName] = count;
+        print("✅ $tableName: $count records loaded");
+      } catch (e) {
+        print("❌ Failed to load $tableName: $e");
+        results[tableName] = -1; // Mark as failed
+      }
+    }
+
+    final totalRecords = results.values
+        .where((v) => v > 0)
+        .fold(0, (a, b) => a + b);
+    final failedTables = results.entries.where((e) => e.value == -1).length;
+
+    print(
+      "✅ Initial data load complete: $totalRecords records across ${results.length} tables",
+    );
+    if (failedTables > 0) {
+      print("⚠️ $failedTables table(s) failed to load");
+    }
+
+    return results;
+  }
+
+  /// Load data for a specific table
   Future<dynamic> loadData({
     required String url,
     required String token,
@@ -100,33 +147,40 @@ class SSEManager {
 
       if (response.statusCode == 200) {
         final db = await DBHelper.db;
-
         final validCols = await getTableColumns(db, tableName);
 
-        if (response.data is List) {
-          for (final row in response.data) {
+        // Load data in a single transaction for atomicity
+        await db.transaction((txn) async {
+          if (response.data is List) {
+            print(
+              "📥 Loading ${response.data.length} records into $tableName (single transaction)",
+            );
+            for (final row in response.data) {
+              final filteredRow = filterRow(
+                Map<String, dynamic>.from(row),
+                validCols,
+              );
+              await txn.insert(
+                tableName,
+                filteredRow,
+                conflictAlgorithm: ConflictAlgorithm.replace,
+              );
+            }
+          } else if (response.data is Map) {
+            print("📥 Loading 1 record into $tableName");
             final filteredRow = filterRow(
-              Map<String, dynamic>.from(row),
+              Map<String, dynamic>.from(response.data),
               validCols,
             );
-            await db.insert(
+            await txn.insert(
               tableName,
               filteredRow,
               conflictAlgorithm: ConflictAlgorithm.replace,
             );
           }
-        } else if (response.data is Map) {
-          final filteredRow = filterRow(
-            Map<String, dynamic>.from(response.data),
-            validCols,
-          );
-          await db.insert(
-            tableName,
-            filteredRow,
-            conflictAlgorithm: ConflictAlgorithm.replace,
-          );
-        }
+        });
 
+        print("✅ Data loaded into $tableName successfully");
         return response.data;
       } else {
         throw Exception("❌ Failed with status code: ${response.statusCode}");
