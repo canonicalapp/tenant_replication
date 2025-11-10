@@ -1,6 +1,5 @@
 import 'dart:convert';
 import 'package:dio/dio.dart';
-import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:sqflite/sqflite.dart';
 import 'package:tenant_replication/tenant_replication.dart';
 
@@ -8,16 +7,14 @@ import 'sse_handler_web.dart' if (dart.library.io) 'sse_handler_native.dart';
 
 class SSEManager {
   final Dio _dio = Dio();
-  static final FlutterSecureStorage _secureStorage = FlutterSecureStorage();
+
   static Future<void> initializeSSE(url, token) async {
-    String? deviceId = await _secureStorage.read(key: "DeviceId");
+    final deviceId = await DBHelper.getDeviceId48Bit();
     print('Initializing SSE.............................');
 
     // Create headers with deviceId and authorization token
     Map<String, String> headers = {};
-    if (deviceId != null) {
-      headers['deviceId'] = deviceId;
-    }
+    headers['deviceId'] = deviceId.toString();
     if (token != null) {
       headers['Authorization'] = 'Bearer $token';
     }
@@ -122,7 +119,7 @@ class SSEManager {
     required String tableName,
     Map<String, dynamic>? extraParams, // 👈 optional query params
   }) async {
-    final String? deviceId = await _secureStorage.read(key: "DeviceId");
+    final deviceId = await DBHelper.getDeviceId48Bit();
     final lastUpdated = await getMaxLastUpdated(tableName);
 
     try {
@@ -132,10 +129,10 @@ class SSEManager {
       });
 
       // Base query parameters
-      final queryParams = {
+      final queryParams = <String, dynamic>{
         "tableName": tableName,
         "lastUpdated": lastUpdated ?? 0,
-        "deviceId": deviceId,
+        "deviceId": deviceId.toString(),
       };
 
       // Add extra params if provided

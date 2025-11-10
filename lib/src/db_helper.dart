@@ -1,4 +1,3 @@
-import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:sqflite/sqflite.dart';
 import 'package:path/path.dart';
 import 'package:path_provider/path_provider.dart';
@@ -6,11 +5,25 @@ import 'package:crypto/crypto.dart';
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'auth/auth_service.dart';
+import 'auth/default_auth_service.dart';
 
 class DBHelper {
   static Database? _db;
   static String? _currentDbName;
-  static final FlutterSecureStorage _secureStorage = FlutterSecureStorage();
+  static AuthService? _authService;
+
+  /// Set a custom auth service implementation
+  /// If not set, DefaultAuthService will be used
+  static void setAuthService(AuthService authService) {
+    _authService = authService;
+  }
+
+  /// Get the current auth service (creates default if not set)
+  static AuthService get authService {
+    _authService ??= DefaultAuthService();
+    return _authService!;
+  }
 
   // Constants
   static const int _appVersion = 1; // Application schema version
@@ -136,20 +149,19 @@ class DBHelper {
 
   /// Get DeviceID as 48-bit integer (supports MAC addresses)
   static Future<int> getDeviceId48Bit() async {
-    String? deviceId = await _secureStorage.read(key: "DeviceId");
-    if (deviceId == null || deviceId.isEmpty) {
-      print("Device ID is not set in secure storage.");
-      throw Exception("Device ID is not set in secure storage.");
-    }
+    final deviceId = await authService.getDeviceId();
 
-    final id = int.parse(deviceId);
+    if (deviceId == null) {
+      print("⚠️ Device ID is not set in auth service.");
+      throw Exception("Device ID is not set in auth service.");
+    }
 
     // Ensure it fits in 48 bits (max value: 281474976710655)
-    if (id > 0xFFFFFFFFFFFF) {
-      throw Exception("DeviceID exceeds 48-bit limit: $id");
+    if (deviceId > 0xFFFFFFFFFFFF) {
+      throw Exception("DeviceID exceeds 48-bit limit: $deviceId");
     }
 
-    return id;
+    return deviceId;
   }
 
   static Future<Database> get db async {
@@ -167,19 +179,19 @@ class DBHelper {
     return _db!;
   }
 
-  /// Extract tenant ID from secure storage
+  /// Extract tenant ID from auth service
   static Future<String?> _getTenantId() async {
-    return await _secureStorage.read(key: "TenantId");
+    return await authService.getTenantId();
   }
 
-  /// Extract subject ID from secure storage
+  /// Extract subject ID from auth service
   static Future<String?> _getSubjectId() async {
-    return await _secureStorage.read(key: "SubjectId");
+    return await authService.getSubjectId();
   }
 
-  /// Extract app name from secure storage
+  /// Extract app name from auth service
   static Future<String?> _getAppName() async {
-    return await _secureStorage.read(key: "AppName");
+    return await authService.getAppName();
   }
 
   /// Generate database name using HEX(SHA256('sub:tid:app'))
@@ -199,15 +211,19 @@ class DBHelper {
         tid.isEmpty ||
         app.isEmpty) {
       print("⚠️ Missing sub, tid, or app - using legacy database name");
+      print("   Hint: Ensure JWT token is set with 'tid', 'sub', 'app' claims");
 
-      String? databaseName = await _secureStorage.read(key: "DatabaseName");
-      String? dbName = databaseName?.replaceAll("@", "_").replaceAll(".", "_");
-
-      if (dbName == null || dbName.isEmpty) {
-        return "app.db"; // Default DB name
+      // Fallback: try to use DefaultAuthService with legacy keys
+      if (_authService is DefaultAuthService) {
+        final defaultAuth = _authService as DefaultAuthService;
+        // Check if we have a valid token to parse
+        final token = await defaultAuth.getAuthToken();
+        if (token != null) {
+          print("   Found auth token, but missing required claims");
+        }
       }
 
-      return dbName.endsWith(".db") ? dbName : "$dbName.db";
+      return "app.db"; // Default DB name
     }
 
     // Create the string: 'sub:tid:app'
