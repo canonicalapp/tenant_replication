@@ -20,17 +20,17 @@ class SSEManager {
     }
 
     // final SSEHandler _sseHandler = SSEHandler('$url/events?deviceId=$deviceId');
-    final SSEHandler _sseHandler = SSEHandler(
+    final SSEHandler sseHandler = SSEHandler(
       '$url/mtdd/events',
       headers: headers,
     );
 
-    _sseHandler.startListening();
+    sseHandler.startListening();
     print(
       'SSE started listening for events.............................deviceId=$deviceId',
     );
 
-    _sseHandler.stream.listen((data) async {
+    sseHandler.stream.listen((data) async {
       try {
         print('Raw event received: $data'); // Debug print of the raw event
         if (data != 'Connected') {
