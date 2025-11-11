@@ -1,6 +1,6 @@
 name: tenant_replication
-description: 'Tenant-Replication is a Flutter SDK designed to facilitate seamless tenant data replication and synchronization across distributed systems.'
-version: 0.0.5
+description: "Tenant-Replication is a Flutter SDK designed to facilitate seamless tenant data replication and synchronization across distributed systems."
+version: 0.0.6
 homepage: https://github.com/canons-dev/tenant_replication.git
 repository: https://github.com/canons-dev/tenant_replication.git
 

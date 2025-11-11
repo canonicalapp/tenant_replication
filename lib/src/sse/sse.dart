@@ -131,8 +131,8 @@ class SSEManager {
       // Base query parameters
       final queryParams = <String, dynamic>{
         "tableName": tableName,
-        "lastUpdated": lastUpdated ?? 0,
-        "deviceId": deviceId.toString(),
+        "lastUpdated": lastUpdated ?? 1,
+        "deviceId": deviceId,
       };
 
       // Add extra params if provided
