@@ -218,6 +218,31 @@ Local SQLite ←→ Triggers → tbldmlog → SyncManager → Server
 
 ## 🧪 Testing
 
+### Example Application (Recommended)
+
+A complete Flutter example app is available to test all SDK features:
+
+```bash
+cd example
+flutter pub get
+flutter run
+```
+
+**Quick Start:**
+- [5-Minute Quick Start](example/QUICK_START.md) - Fastest path to testing
+- [Complete Setup Guide](example/MTDD_ECOSYSTEM_SETUP.md) - Full backend setup
+- [Architecture Guide](example/ARCHITECTURE.md) - Understand the system
+- [Example README](example/README.md) - Detailed documentation
+
+The example includes:
+- ✅ Authentication setup (JWT + Direct mode)
+- ✅ Database operations with CRUD
+- ✅ Real-time sync demonstration
+- ✅ SSE integration
+- ✅ Complete MTDD backend integration
+
+### Unit Tests
+
 Testing suite is available in git stash. To restore:
 
 ```bash
