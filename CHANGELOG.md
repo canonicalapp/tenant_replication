@@ -1,5 +1,7 @@
 # Changelog
 
+## 0.0.6
+
 All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
@@ -71,7 +73,9 @@ This is a major release with significant architectural improvements and breaking
 ### Breaking Changes
 
 #### 1. Table Name Change
+
 **Before:**
+
 ```sql
 CREATE TABLE tbldmlog (
   TXID INTEGER PRIMARY KEY,
@@ -82,6 +86,7 @@ CREATE TABLE tbldmlog (
 ```
 
 **After:**
+
 ```sql
 CREATE TABLE mtds_change_log (
   txid INTEGER PRIMARY KEY,
@@ -94,7 +99,9 @@ CREATE TABLE mtds_change_log (
 **Migration:** Run the migration script in MIGRATION_GUIDE.md
 
 #### 2. API Changes
+
 **Before:**
+
 ```dart
 final db = await DBHelper.db;
 await DBHelper.softDelete(...);
@@ -102,6 +109,7 @@ await SyncManager.syncWithServer(url);
 ```
 
 **After:**
+
 ```dart
 final sdk = MTDS_SDK(
   db: myDriftDatabase,
@@ -115,9 +123,11 @@ await sdk.syncToServer();
 ```
 
 #### 3. Dependency Management
+
 **Before:** drift and dio were re-exported
 
 **After:** Must add explicitly in pubspec.yaml
+
 ```yaml
 dependencies:
   mtds: ^1.0.0
@@ -126,7 +136,9 @@ dependencies:
 ```
 
 #### 4. Server Protocol
+
 **Before:**
+
 ```json
 POST /update
 Body: [...]
@@ -134,6 +146,7 @@ Response: {"success": true}
 ```
 
 **After:**
+
 ```json
 POST /sync
 Body: {"changes": [...]}
@@ -181,12 +194,14 @@ Response: {
 ## [0.0.5] - 2024
 
 ### Added
+
 - MTDS compliance (Phases 1-4)
 - DeviceID packing in PRAGMAs
 - Trigger system
 - Auth service integration
 
 ### Changed
+
 - Field naming with `mtds_` prefix
 - Database path to app support directory
 
@@ -195,6 +210,7 @@ Response: {
 ## [0.0.1] - 2024
 
 ### Added
+
 - Initial release
 - Basic sync functionality
 - SQLite database support
@@ -204,6 +220,7 @@ Response: {
 ## Migration Guides
 
 ### v0.0.5 → v1.0.0
+
 See [MIGRATION_GUIDE.md](docs/MIGRATION_GUIDE.md) for detailed migration instructions.
 
 ---
