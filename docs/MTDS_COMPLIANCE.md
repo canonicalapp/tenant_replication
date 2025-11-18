@@ -1,7 +1,7 @@
 # MTDS Compliance Status
 
 ## Overview
-This document tracks the Multi-Tenant Data Synchronization (MTDS) compliance status for the tenant_replication Flutter SDK.
+This document tracks the Multi-Tenant Data Synchronization (MTDS) compliance status for the mtds Flutter SDK.
 
 ## Compliance Summary
 
@@ -9,7 +9,7 @@ This document tracks the Multi-Tenant Data Synchronization (MTDS) compliance sta
 
 **Completion Date:** 2024
 
-**Version:** 0.0.5+
+**Version:** 1.0.0+
 
 ---
 
@@ -19,16 +19,15 @@ This document tracks the Multi-Tenant Data Synchronization (MTDS) compliance sta
 **Status:** COMPLETE
 
 **Implementation:**
-- Created pluggable `AuthService` interface
-- Implemented `DefaultAuthService` with JWT parsing
-- Extracts `tid` (tenant ID), `sub` (subject ID), `app` (application name) from JWT tokens
-- Falls back to secure storage for backward compatibility
+- SDK does not handle authentication internally
+- Consumer configures Dio with authentication interceptors
+- Supports JWT tokens, custom headers, or any auth mechanism
+- Consumer has full control over authentication flow
 
-**Phase:** Phase 4 - Auth Service Integration
-
-**Files:**
-- `lib/src/auth/auth_service.dart`
-- `lib/src/auth/default_auth_service.dart`
+**Current Implementation:**
+- Consumer provides configured Dio instance to SDK
+- SDK passes through all headers from Dio interceptors
+- No SDK-managed auth state or tokens
 
 ---
 
@@ -75,13 +74,13 @@ final hexString = digest.toString().toUpperCase();
 
 **Implementation:**
 - All special fields prefixed with `mtds_`
-- Fields: `mtds_lastUpdatedTxid`, `mtds_DeletedTXID`, `mtds_DeviceID`
+- Fields: `mtds_last_updated_txid`, `mtds_deleted_txid`, `mtds_device_id` (snake_case)
 
 **Phase:** Phase 1 - Core Infrastructure
 
 **Tables Affected:**
 - All user tables (via triggers)
-- `tbldmlog` system table
+- `mtds_change_log` system table
 
 ---
 
@@ -100,42 +99,33 @@ final hexString = digest.toString().toUpperCase();
 WHEN (NEW.lastUpdatedTxid & 0xFFFFFF) = (SELECT application_id ...)
 ```
 
-**After:**
+**Current Implementation:**
 ```sql
-WHEN (NEW.mtds_DeviceID & 0xFFFFFFFF) = (SELECT application_id ...)
-AND ((NEW.mtds_DeviceID >> 32) & 0xFFFF) = (...)
+WHEN NEW.mtds_device_id = (SELECT value FROM mtds_metadata WHERE key = 'device_id')
 ```
 
 ---
 
-### ✅ Requirement 6: PRAGMA Storage
+### ✅ Requirement 6: Device ID Storage
 **Status:** COMPLETE
 
 **Implementation:**
-- `user_version` stores: App Version (16 bits) + DeviceID MS 16 bits
-- `application_id` stores: DeviceID LS 32 bits
-- Total: 48-bit DeviceID + 16-bit App Version
+- Device ID stored in `mtds_metadata` table (key: 'device_id')
+- More reliable than SQLite PRAGMAs
+- Accessible to triggers for change tracking
 
-**Phase:** Phase 2 - DeviceID & Versioning
-
-**Code:**
-```dart
-// Pack user_version
-final packedUserVersion = packUserVersion(_appVersion, deviceId48);
-await database.execute("PRAGMA user_version = $packedUserVersion;");
-
-// Pack application_id
-final packedAppId = packApplicationId(deviceId48);
-await database.execute("PRAGMA application_id = $packedAppId;");
-```
+**Current Implementation:**
+- `SchemaManager.upsertMetadata()` stores device ID
+- Triggers read from `mtds_metadata` table
+- No dependency on PRAGMA values
 
 ---
 
-### ✅ Requirement 7: tbldmlog Schema
+### ✅ Requirement 7: mtds_change_log Schema
 **Status:** COMPLETE
 
 **Implementation:**
-- Added `mtds_DeviceID INTEGER NOT NULL` field
+- Includes `mtds_device_id INTEGER NOT NULL` field
 - DeviceID tracked separately from PK
 - 48-bit DeviceID support
 
@@ -143,11 +133,11 @@ await database.execute("PRAGMA application_id = $packedAppId;");
 
 **Schema:**
 ```sql
-CREATE TABLE tbldmlog (
+CREATE TABLE mtds_change_log (
   TXID INTEGER PRIMARY KEY AUTOINCREMENT,
   TableName TEXT NOT NULL,
   PK INTEGER NOT NULL,
-  mtds_DeviceID INTEGER NOT NULL,  -- NEW
+  mtds_device_id INTEGER NOT NULL,
   Action INTEGER,
   PayLoad TEXT
 );
@@ -160,7 +150,7 @@ CREATE TABLE tbldmlog (
 
 **Implementation:**
 - `generateNanosecondTimestamp()` produces 64-bit nanosecond timestamps
-- Used for `mtds_lastUpdatedTxid` values
+- Used for `mtds_last_updated_txid` values
 - Ensures monotonic ordering across machines
 
 **Phase:** Phase 2 - DeviceID & Versioning
@@ -181,7 +171,7 @@ static int generateNanosecondTimestamp() {
 **Implementation:**
 - Documented in `SERVER_REQUIREMENTS.md`
 - Server must use `mtds_` prefix for special fields
-- Server must include `mtds_DeviceID` field
+- Server must include `mtds_device_id` field
 
 **Phase:** Phase 5 - Documentation
 
@@ -196,7 +186,7 @@ static int generateNanosecondTimestamp() {
 **Status:** COMPLETE
 
 **Implementation:**
-- `softDelete()` - Sets `mtds_DeletedTXID`, replicates, then deletes on confirmation
+- `softDelete()` - Sets `mtds_deleted_txid`, replicates to server, then can be hard-deleted locally
 - `hardDelete()` - Direct DELETE, no replication
 - Automatic soft-delete confirmation processing
 
@@ -226,16 +216,16 @@ await DBHelper.hardDelete(
 
 **Implementation:**
 - Documented in `SERVER_REQUIREMENTS.md`
-- All unique indexes must include `mtds_DeletedTXID`
+- All unique indexes must include `mtds_deleted_txid`
 - Prevents unique constraint violations after soft-delete
 
 **Phase:** Phase 5 - Documentation
 
 **Example:**
 ```sql
--- Correct: Includes mtds_DeletedTXID
-CREATE UNIQUE INDEX idx_users_email 
-ON users(email, mtds_DeletedTXID);
+-- Correct: Includes mtds_deleted_txid
+CREATE UNIQUE INDEX idx_users_email
+ON users(email, mtds_deleted_txid);
 ```
 
 ---
@@ -358,10 +348,10 @@ await database.execute("PRAGMA foreign_keys = OFF;");
 2. Add `mtds_` fields to all tables
 3. Set up auth service (or use existing secure storage)
 4. Update server with mtds_ fields
-5. Update unique indexes to include `mtds_DeletedTXID`
+5. Update unique indexes to include `mtds_deleted_txid`
 
 ### New Projects
-1. Install package: `flutter pub add tenant_replication`
+1. Install package: `flutter pub add mtds`
 2. Configure auth service with JWT token
 3. Ensure tables have `mtds_` fields
 4. Initialize database: `await DBHelper.db`

@@ -1,0 +1,150 @@
+import 'package:drift/drift.dart';
+
+import '../models/server_events.dart';
+
+const String _deviceIdSelect =
+    "(SELECT CAST(value AS INTEGER) FROM mtds_metadata WHERE key = 'device_id')";
+
+class TriggerManager {
+  /// Setup triggers on the provided Drift database
+  ///
+  /// This method creates INSERT and UPDATE triggers on all user tables
+  /// to automatically log changes to the mtds_change_log table.
+  ///
+  /// Usage:
+  /// ```dart
+  /// final driftDb = AppDatabase();
+  /// await TriggerManager.setupTriggers(driftDb);
+  /// ```
+  static Future<void> setupTriggers(GeneratedDatabase db) async {
+    print("🔄 Setting up triggers...");
+
+    // Get all tables except system tables and mtds_change_log
+    final tablesResult =
+        await db.customSelect('''
+      SELECT name FROM sqlite_master 
+      WHERE type = 'table' 
+        AND name NOT LIKE 'sqlite_%' 
+        AND name NOT IN ('mtds_change_log', 'mtds_metadata')
+    ''').get();
+
+    List<Map<String, dynamic>> tables =
+        tablesResult.map((row) => row.data).toList();
+
+    // Drop legacy triggers that may have been created before exclusions existed.
+    await _dropTriggersForTable(db, 'mtds_metadata');
+
+    for (var table in tables) {
+      String tableName = table['name'];
+      print('🔹 Setting up triggers for table: $tableName');
+
+      // Retrieve table schema to determine the primary key
+      final columnsResult =
+          await db.customSelect('PRAGMA table_info($tableName);').get();
+
+      List<Map<String, dynamic>> columns =
+          columnsResult.map((row) => row.data).toList();
+
+      Map<String, dynamic> primaryKeyColumn = columns.firstWhere(
+        (col) => col['pk'] > 0,
+        orElse: () => {},
+      );
+
+      if (primaryKeyColumn.isEmpty) {
+        print("⚠️ Skipping $tableName, no primary key found.");
+        continue;
+      }
+
+      String pkColumn = primaryKeyColumn['name'];
+      print('   ✅ Primary key column: $pkColumn');
+
+      // Construct JSON fields for NEW and OLD
+      String newJsonFields = columns
+          .map((col) => "'${col['name']}', NEW.${col['name']}")
+          .join(', ');
+      String oldJsonFields = columns
+          .map((col) => "'${col['name']}', OLD.${col['name']}")
+          .join(', ');
+
+      final pkValueExpression = "CAST(NEW.$pkColumn AS TEXT)";
+
+      try {
+        await _dropTriggersForTable(db, tableName);
+
+        // INSERT Trigger
+        // Only capture local writes by matching metadata device_id
+        await db.customStatement('''
+          CREATE TRIGGER IF NOT EXISTS trigger_${tableName}_insert
+          AFTER INSERT ON $tableName
+          FOR EACH ROW
+          WHEN (
+            COALESCE($_deviceIdSelect, -1) = NEW.mtds_device_id
+          )
+          BEGIN
+              INSERT INTO mtds_change_log (txid, table_name, record_pk, mtds_device_id, action, payload)
+              VALUES (
+                NEW.mtds_last_updated_txid,
+                '$tableName',
+                $pkValueExpression,
+                NEW.mtds_device_id,
+                '${ServerAction.insert.name}',
+                json_object('New', json_object($newJsonFields), 'old', NULL)
+              );
+          END;
+        ''');
+
+        // UPDATE Trigger
+        // Only capture local writes by matching metadata device_id
+        await db.customStatement('''
+          CREATE TRIGGER IF NOT EXISTS trigger_${tableName}_update
+          AFTER UPDATE ON $tableName
+          FOR EACH ROW
+          WHEN (
+            (
+              OLD.mtds_last_updated_txid <> NEW.mtds_last_updated_txid 
+              AND COALESCE($_deviceIdSelect, -1) = NEW.mtds_device_id
+            )
+            OR
+            (
+              OLD.mtds_deleted_txid IS NULL 
+              AND NEW.mtds_deleted_txid IS NOT NULL 
+              AND COALESCE($_deviceIdSelect, -1) = NEW.mtds_device_id
+            )
+          )
+          BEGIN
+              INSERT INTO mtds_change_log (txid, table_name, record_pk, mtds_device_id, action, payload)
+              VALUES (
+                CASE 
+                  WHEN OLD.mtds_deleted_txid IS NULL AND NEW.mtds_deleted_txid IS NOT NULL THEN NEW.mtds_deleted_txid 
+                  ELSE NEW.mtds_last_updated_txid 
+                END,
+                '$tableName',
+                $pkValueExpression,
+                NEW.mtds_device_id,
+                CASE 
+                  WHEN OLD.mtds_deleted_txid IS NULL AND NEW.mtds_deleted_txid IS NOT NULL THEN '${ServerAction.delete.name}' 
+                  ELSE '${ServerAction.update.name}' 
+                END,
+                json_object('New', json_object($newJsonFields), 'old', json_object($oldJsonFields))
+              );
+          END;
+        ''');
+      } catch (e) {
+        print('❌ Error creating triggers for $tableName: $e');
+      }
+    }
+    print("✅ Triggers created successfully.");
+  }
+}
+
+Future<void> _dropTriggersForTable(
+  GeneratedDatabase db,
+  String tableName,
+) async {
+  await db.customStatement(
+    'DROP TRIGGER IF EXISTS trigger_${tableName}_insert;',
+  );
+  await db.customStatement(
+    'DROP TRIGGER IF EXISTS trigger_${tableName}_update;',
+  );
+}
