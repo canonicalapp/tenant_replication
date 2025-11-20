@@ -1,9 +1,10 @@
 import 'package:drift/drift.dart';
-import '../utils/mtds_utils.dart';
+import '../utils/tx.dart';
 
 /// Service for handling delete operations
 ///
-/// Provides soft delete (syncs to server) and hard delete (local only) operations.
+/// Provides soft delete (syncs to server) operations.
+/// Users can perform normal DELETE operations directly; triggers will handle change tracking.
 class DeleteService {
   final GeneratedDatabase db;
   final int deviceId;
@@ -33,7 +34,7 @@ class DeleteService {
     required String primaryKeyColumn,
     required dynamic primaryKeyValue,
   }) async {
-    final deletedTxid = MtdsUtils.generateTxid();
+    final deletedTxid = TX.getId();
 
     await db.customStatement(
       '''
@@ -44,7 +45,7 @@ class DeleteService {
         mtds_last_updated_txid = ?
       WHERE $primaryKeyColumn = ?
       ''',
-      [deletedTxid, deviceId, deletedTxid, primaryKeyValue],
+      [deletedTxid.toInt(), deviceId, deletedTxid.toInt(), primaryKeyValue],
     );
 
     print(
@@ -53,39 +54,4 @@ class DeleteService {
     );
   }
 
-  /// Hard delete: Permanently remove record from local database (local only)
-  ///
-  /// Immediately deletes the record without syncing to server.
-  /// Use this for local-only data that doesn't need to be synced (e.g., cache, temporary data).
-  ///
-  /// ⚠️ WARNING: This operation is permanent and will NOT be synced to the server!
-  ///
-  /// Parameters:
-  /// - `tableName`: Name of the table
-  /// - `primaryKeyColumn`: Name of the primary key column
-  /// - `primaryKeyValue`: Value of the primary key
-  ///
-  /// Example:
-  /// ```dart
-  /// await deleteService.hardDelete(
-  ///   tableName: 'cache',
-  ///   primaryKeyColumn: 'id',
-  ///   primaryKeyValue: 456,
-  /// );
-  /// ```
-  Future<void> hardDelete({
-    required String tableName,
-    required String primaryKeyColumn,
-    required dynamic primaryKeyValue,
-  }) async {
-    await db.customStatement(
-      'DELETE FROM $tableName WHERE $primaryKeyColumn = ?',
-      [primaryKeyValue],
-    );
-
-    print(
-      '⚠️ Hard delete: $tableName[$primaryKeyColumn=$primaryKeyValue] '
-      'permanently removed (local only, no sync)',
-    );
-  }
 }

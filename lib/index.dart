@@ -13,6 +13,7 @@ export 'src/helpers/pragma_helper.dart';
 
 // Export utilities
 export 'src/utils/mtds_utils.dart';
+export 'src/utils/tx.dart';
 
 // Export models
 export 'src/models/sync_result.dart';

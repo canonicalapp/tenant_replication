@@ -28,3 +28,6 @@ doc/api/
 
 # Development-only documentation
 docs/dev-docs/
+openspec/changes
+
+.cursor/

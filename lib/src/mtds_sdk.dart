@@ -7,13 +7,14 @@ import 'sync/sse_service.dart';
 import 'sync/delete_service.dart';
 import 'sync/auto_sync_service.dart' show AutoSyncService, AutoSyncEvent;
 import 'helpers/pragma_helper.dart';
+import 'utils/tx.dart';
 import 'utils/mtds_utils.dart';
 
 /// Main SDK class for Multi-Tenant Data Synchronization (MTDS)
 ///
 /// This SDK provides offline-first data synchronization with:
 /// - Automatic change tracking via SQL triggers
-/// - Soft delete (syncs to server) and hard delete (local only)
+/// - Soft delete (syncs to server)
 /// - Hybrid timestamps (client ordering + server authority)
 /// - Real-time updates via Server-Sent Events (SSE)
 /// - Conflict resolution using Last Write Wins (LWW)
@@ -69,7 +70,14 @@ class MTDS_SDK {
   final String serverUrl;
 
   /// Unique 48-bit identifier for this device
-  final int deviceId;
+  /// Initialized from metadata table or generated if not provided
+  int _deviceId = 0; // Temporary, will be set in initialize()
+  
+  /// Get the device ID
+  int get deviceId => _deviceId;
+
+  /// Stored provided device ID for initialization
+  final int? _providedDeviceId;
 
   /// Sync service for uploading changes
   late final SyncService _syncService;
@@ -89,32 +97,79 @@ class MTDS_SDK {
   /// - `db`: Drift database instance
   /// - `httpClient`: Dio instance (configure with auth interceptors)
   /// - `serverUrl`: Base URL of MTDS server
-  /// - `deviceId`: Unique device identifier (48-bit)
+  /// - `deviceId`: Optional unique device identifier (48-bit). If not provided,
+  ///   a random device ID will be generated and stored. If a device ID already
+  ///   exists in the metadata table, it will be used regardless of this parameter.
   ///
   /// The SDK will:
-  /// 1. Store deviceId in SQLite PRAGMAs
+  /// 1. Initialize or retrieve deviceId from metadata table
   /// 2. Initialize internal services
   ///
   /// Example:
   /// ```dart
+  /// // With explicit device ID
   /// final sdk = MTDS_SDK(
   ///   db: AppDatabase(),
   ///   httpClient: Dio(),
   ///   serverUrl: 'https://api.example.com',
   ///   deviceId: 123456789012,
   /// );
+  ///
+  /// // Without device ID (will generate random)
+  /// final sdk = MTDS_SDK(
+  ///   db: AppDatabase(),
+  ///   httpClient: Dio(),
+  ///   serverUrl: 'https://api.example.com',
+  /// );
   /// ```
   MTDS_SDK({
     required this.db,
     required this.httpClient,
     required this.serverUrl,
-    required this.deviceId,
-  }) {
+    int? deviceId,
+  }) : _providedDeviceId = deviceId {
+    // Services will be initialized after device ID is set in initialize()
+  }
+
+  /// Initialize SDK asynchronously (call after construction)
+  ///
+  /// This method:
+  /// 1. Checks if device ID exists in metadata table
+  /// 2. Uses existing device ID if found (never changes it)
+  /// 3. Uses provided device ID or generates random if not found
+  /// 4. Stores device ID in metadata table
+  /// 5. Initializes internal services
+  ///
+  /// Example:
+  /// ```dart
+  /// final sdk = MTDS_SDK(...);
+  /// await sdk.initialize();
+  /// ```
+  Future<void> initialize() async {
+    // Check if device ID already exists in metadata
+    final existing = await PragmaHelper.getDeviceId(db);
+    
+    if (existing != null) {
+      // Use existing device ID (never change it)
+      _deviceId = existing;
+      print('✅ Using existing DeviceID from metadata: $_deviceId');
+    } else {
+      // No existing device ID - use provided or generate random
+      final deviceIdToUse = _providedDeviceId ?? MtdsUtils.generateRandomDeviceId();
+      MtdsUtils.validateDeviceId(deviceIdToUse);
+      _deviceId = deviceIdToUse;
+      
+      // Store in metadata table
+      await PragmaHelper.setDeviceId(db, _deviceId);
+      print('📝 Stored new DeviceID in metadata: $_deviceId');
+    }
+    
+    // Now initialize services with the device ID
     _initializeServices();
-    _initializePragmas();
   }
 
   /// Initialize internal services
+  /// Must be called after deviceId is initialized
   void _initializeServices() {
     _syncService = SyncService(
       db: db,
@@ -133,11 +188,6 @@ class MTDS_SDK {
     _deleteService = DeleteService(db: db, deviceId: deviceId);
 
     _autoSyncService = AutoSyncService(db: db, syncService: _syncService);
-  }
-
-  /// Initialize SQLite PRAGMAs with deviceId
-  Future<void> _initializePragmas() async {
-    await PragmaHelper.setDeviceId(db, deviceId);
   }
 
   // ═══════════════════════════════════════════════════════════════
@@ -164,33 +214,6 @@ class MTDS_SDK {
     required dynamic primaryKeyValue,
   }) async {
     return _deleteService.softDelete(
-      tableName: tableName,
-      primaryKeyColumn: primaryKeyColumn,
-      primaryKeyValue: primaryKeyValue,
-    );
-  }
-
-  /// Hard delete: Permanently remove record from local database (local only)
-  ///
-  /// Immediately deletes the record without syncing to server.
-  /// Use this for local-only data that doesn't need to be synced.
-  ///
-  /// ⚠️ WARNING: This operation is permanent and cannot be synced!
-  ///
-  /// Example:
-  /// ```dart
-  /// await sdk.hardDelete(
-  ///   tableName: 'cache',
-  ///   primaryKeyColumn: 'id',
-  ///   primaryKeyValue: 456,
-  /// );
-  /// ```
-  Future<void> hardDelete({
-    required String tableName,
-    required String primaryKeyColumn,
-    required dynamic primaryKeyValue,
-  }) async {
-    return _deleteService.hardDelete(
       tableName: tableName,
       primaryKeyColumn: primaryKeyColumn,
       primaryKeyValue: primaryKeyValue,
@@ -327,14 +350,16 @@ class MTDS_SDK {
   // Utilities
   // ═══════════════════════════════════════════════════════════════
 
-  /// Generate a new TXID (UTC timestamp in nanoseconds)
+  /// Generate a new TXID (monotonic counter in nanoseconds)
+  ///
+  /// Returns a unique, strictly increasing BigInt value for transaction ordering.
   ///
   /// Example:
   /// ```dart
   /// final txid = sdk.generateTxid();
   /// ```
-  int generateTxid() {
-    return MtdsUtils.generateTxid();
+  BigInt generateTxid() {
+    return TX.getId();
   }
 
   /// Dispose resources

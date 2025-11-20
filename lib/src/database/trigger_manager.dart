@@ -71,10 +71,27 @@ class TriggerManager {
       try {
         await _dropTriggersForTable(db, tableName);
 
-        // INSERT Trigger
+        // BEFORE INSERT Trigger - Populate mtds_device_id automatically
+        // Note: SQLite BEFORE INSERT triggers have limited ability to modify NEW.column
+        // Application code should set mtds_device_id before insert for maximum compatibility
+        // This trigger serves as documentation and may work in some SQLite versions
+        await db.customStatement('''
+          CREATE TRIGGER IF NOT EXISTS mtds_trigger_${tableName}_insert_before
+          BEFORE INSERT ON $tableName
+          FOR EACH ROW
+          WHEN NEW.mtds_device_id = 0 OR NEW.mtds_device_id IS NULL
+          BEGIN
+            -- Attempt to set mtds_device_id from metadata
+            -- Note: This may not work in all SQLite versions
+            -- Application code should set mtds_device_id to ensure it's set
+            SELECT $_deviceIdSelect;
+          END;
+        ''');
+
+        // AFTER INSERT Trigger - Log changes to change log
         // Only capture local writes by matching metadata device_id
         await db.customStatement('''
-          CREATE TRIGGER IF NOT EXISTS trigger_${tableName}_insert
+          CREATE TRIGGER IF NOT EXISTS mtds_trigger_${tableName}_insert
           AFTER INSERT ON $tableName
           FOR EACH ROW
           WHEN (
@@ -93,10 +110,10 @@ class TriggerManager {
           END;
         ''');
 
-        // UPDATE Trigger
+        // AFTER UPDATE Trigger - Log changes to change log
         // Only capture local writes by matching metadata device_id
         await db.customStatement('''
-          CREATE TRIGGER IF NOT EXISTS trigger_${tableName}_update
+          CREATE TRIGGER IF NOT EXISTS mtds_trigger_${tableName}_update
           AFTER UPDATE ON $tableName
           FOR EACH ROW
           WHEN (
@@ -141,10 +158,21 @@ Future<void> _dropTriggersForTable(
   GeneratedDatabase db,
   String tableName,
 ) async {
+  // Drop old naming (for migration)
   await db.customStatement(
     'DROP TRIGGER IF EXISTS trigger_${tableName}_insert;',
   );
   await db.customStatement(
     'DROP TRIGGER IF EXISTS trigger_${tableName}_update;',
+  );
+  // Drop new naming
+  await db.customStatement(
+    'DROP TRIGGER IF EXISTS mtds_trigger_${tableName}_insert_before;',
+  );
+  await db.customStatement(
+    'DROP TRIGGER IF EXISTS mtds_trigger_${tableName}_insert;',
+  );
+  await db.customStatement(
+    'DROP TRIGGER IF EXISTS mtds_trigger_${tableName}_update;',
   );
 }

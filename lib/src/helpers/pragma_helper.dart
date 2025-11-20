@@ -4,9 +4,9 @@ import '../database/schema_manager.dart';
 
 /// Helper class for storing MTDS-specific metadata inside SQLite.
 ///
-/// Historically we overloaded PRAGMA `application_id` and `user_version`.
-/// Those PRAGMAs are now reserved for Drift so we store values in the
-/// `mtds_metadata` table managed by [SchemaManager].
+/// Stores device ID and other metadata in the `mtds_metadata` table
+/// managed by [SchemaManager]. This approach avoids conflicts with
+/// Drift's usage of PRAGMA values.
 class PragmaHelper {
   static const _deviceIdKey = 'device_id';
 
@@ -46,6 +46,7 @@ class PragmaHelper {
     int deviceId,
   ) async {
     final existing = await getDeviceId(db);
+
     if (existing != null) {
       print('✅ Using existing DeviceID from metadata: $existing');
       return existing;
@@ -53,6 +54,7 @@ class PragmaHelper {
 
     print('📝 Storing new DeviceID in metadata: $deviceId');
     await setDeviceId(db, deviceId);
+
     return deviceId;
   }
 }
