@@ -149,4 +149,101 @@ class StateTableService {
 
     return BigInt.from(newValue);
   }
+
+  /// Get the maximum server timestamp for a table.
+  ///
+  /// This method:
+  /// 1. First checks the state table (Attribute = 'table:' + tableName)
+  /// 2. If not found, queries MAX(mtds_server_ts) from the user table
+  /// 3. Caches the result in state table for future use
+  ///
+  /// This caching improves performance by avoiding repeated MAX queries,
+  /// especially after hard deletes or when tables are large.
+  ///
+  /// Parameters:
+  /// - `tableName`: Name of the table to get MAX timestamp for
+  ///
+  /// Returns:
+  /// - BigInt representing the maximum mtds_server_ts, or BigInt.zero if no records exist
+  ///
+  /// Example:
+  /// ```dart
+  /// final maxTs = await service.getMaxServerTimestamp('users');
+  /// ```
+  Future<BigInt> getMaxServerTimestamp(String tableName) async {
+    final attribute = 'table:$tableName';
+
+    // First, check state table for cached value
+    final cachedValue = await getNumValue(attribute);
+    if (cachedValue > 0) {
+      return BigInt.from(cachedValue);
+    }
+
+    // If not cached, query MAX(mtds_server_ts) from user table
+    // Note: mtds_server_ts can be NULL, so we use COALESCE to handle that
+    final result =
+        await db.customSelect('''
+      SELECT COALESCE(MAX(mtds_server_ts), 0) as max_ts
+      FROM $tableName
+      WHERE mtds_server_ts IS NOT NULL
+      ''', readsFrom: {}).get();
+
+    final maxTs =
+        result.isEmpty
+            ? BigInt.zero
+            : BigInt.from(result.first.data['max_ts'] as int? ?? 0);
+
+    // Cache the result in state table (even if 0, to avoid repeated queries)
+    await upsertNumValue(attribute, maxTs.toInt());
+
+    return maxTs;
+  }
+
+  /// Update the maximum server timestamp for a table.
+  ///
+  /// Called after sync operations to update the cached MAX timestamp.
+  /// This ensures subsequent syncs use the correct starting point.
+  ///
+  /// Parameters:
+  /// - `tableName`: Name of the table
+  /// - `maxTimestamp`: The new maximum timestamp to cache
+  ///
+  /// Example:
+  /// ```dart
+  /// await service.updateMaxServerTimestamp('users', BigInt.from(1234567890));
+  /// ```
+  Future<void> updateMaxServerTimestamp(
+    String tableName,
+    BigInt maxTimestamp,
+  ) async {
+    final attribute = 'table:$tableName';
+    await upsertNumValue(attribute, maxTimestamp.toInt());
+  }
+
+  /// Get MAX server timestamp for multiple tables.
+  ///
+  /// Returns a map of table names to their maximum server timestamps.
+  /// Uses cached values from state table when available.
+  ///
+  /// Parameters:
+  /// - `tableNames`: List of table names to get timestamps for
+  ///
+  /// Returns:
+  /// - Map of table name to BigInt timestamp
+  ///
+  /// Example:
+  /// ```dart
+  /// final timestamps = await service.getMaxServerTimestamps(['users', 'products']);
+  /// ```
+  Future<Map<String, BigInt>> getMaxServerTimestamps(
+    List<String> tableNames,
+  ) async {
+    final Map<String, BigInt> result = {};
+
+    for (final tableName in tableNames) {
+      result[tableName] = await getMaxServerTimestamp(tableName);
+    }
+
+    return result;
+  }
 }

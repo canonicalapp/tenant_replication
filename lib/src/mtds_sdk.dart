@@ -325,6 +325,9 @@ class MTDS_SDK {
   /// Fetches the latest data from the server for the given tables.
   /// This should be called on app startup or after a long offline period.
   ///
+  /// **Note**: This method does NOT filter by device ID. Use [initialSync] for
+  /// device ID filtering and MAX timestamp caching.
+  ///
   /// Parameters:
   /// - `tableNames`: List of table names to load
   ///
@@ -334,6 +337,35 @@ class MTDS_SDK {
   /// ```
   Future<void> loadFromServer({required List<String> tableNames}) async {
     await _syncService.loadFromServer(tableNames: tableNames);
+  }
+
+  /// Initial sync: Get updates since last sync for all tables.
+  ///
+  /// This method:
+  /// 1. Gets MAX(mtds_server_ts) for each table from state table (cached)
+  /// 2. Sends table names with max timestamps to server
+  /// 3. Receives updates where mtds_server_ts > requested_timestamp
+  /// 4. Filters by device ID to prevent loops
+  /// 5. Applies updates to local database
+  /// 6. Updates state table with new MAX timestamps
+  ///
+  /// **Device ID Filtering**: Updates from the same device are skipped to prevent
+  /// infinite synchronization loops. Only updates from other devices are applied.
+  ///
+  /// **When to Call**:
+  /// - On app startup (automatically called if enabled)
+  /// - After network reconnection
+  /// - After a long offline period
+  ///
+  /// Parameters:
+  /// - `tableNames`: List of table names to sync
+  ///
+  /// Example:
+  /// ```dart
+  /// await sdk.initialSync(tableNames: ['users', 'products']);
+  /// ```
+  Future<void> initialSync({required List<String> tableNames}) async {
+    await _syncService.initialSync(tableNames: tableNames);
   }
 
   // ═══════════════════════════════════════════════════════════════
