@@ -1,38 +1,211 @@
-/// Transaction ID (TXID) generation with monotonic counter
+import 'dart:math';
+
+/// Transaction ID (TXID) generation with monotonic counter and device ID encoding
 ///
 /// Provides unique, strictly increasing transaction IDs for MTDS synchronization.
-/// Uses a monotonic counter combined with timestamp to guarantee uniqueness
-/// even under concurrent operations.
+/// Uses a monotonic counter combined with timestamp and device ID encoding to
+/// guarantee uniqueness and enable conflict resolution.
+///
+/// The ID format encodes:
+/// - Upper 40 bits: Logical milliseconds since 2025 epoch + device ID mix
+/// - Lower 24 bits: Last 24 bits of device ID
 ///
 /// Example:
 /// ```dart
-/// final txid1 = TX.getId(); // Returns BigInt
-/// final txid2 = TX.getId(); // Returns BigInt > txid1
+/// TX.init(deviceId64);
+/// final txid1 = TX.nextId(); // Returns int64
+/// final txid2 = TX.nextId(); // Returns int64 > txid1
+/// final utc = TX.getUTC(txid1); // Extract UTC DateTime
 /// ```
 class TX {
-  /// Static counter that ensures monotonic ordering
-  static BigInt now = BigInt.zero;
+  /// Epoch start: January 1, 2025 (timestamp: 1735689600000 milliseconds)
+  static const int _epochMs = 1735689600000;
+
+  /// Last 24 bits of device ID
+  static int? _dev24;
+
+  /// Base milliseconds since 2025 epoch (calculated at init)
+  static int? _baseMsSince2025;
+
+  /// Stopwatch for tracking elapsed time
+  static final Stopwatch _sw = Stopwatch();
+
+  /// Last logical milliseconds (for monotonic guarantee)
+  static int _lastLogicalMs = 0;
+
+  /// Initialization flag
+  static bool _initialized = false;
+
+  /// Initialize TX class with 64-bit device ID
+  ///
+  /// This must be called before using [nextId()]. Subsequent calls are ignored
+  /// if already initialized.
+  ///
+  /// Parameters:
+  /// - `deviceId64`: 64-bit device identifier
+  ///
+  /// Example:
+  /// ```dart
+  /// TX.init(12345678901234567890);
+  /// ```
+  static void init(int deviceId64) {
+    if (_initialized) return;
+
+    // Extract last 24 bits of device ID
+    _dev24 = deviceId64 & 0xFFF_FFF;
+
+    // Calculate base milliseconds since 2025 epoch
+    final now = DateTime.now().millisecondsSinceEpoch;
+    _baseMsSince2025 = now - _epochMs;
+
+    // Start stopwatch for elapsed time tracking
+    _sw.start();
+
+    // Initialize last logical milliseconds
+    _lastLogicalMs = _baseMsSince2025!;
+
+    _initialized = true;
+  }
 
   /// Generate a unique transaction ID
   ///
-  /// Returns a BigInt that is guaranteed to be:
+  /// Returns a 64-bit integer that is guaranteed to be:
   /// - Unique (no two calls return the same value)
   /// - Strictly increasing (each call returns a value > previous)
-  /// - Based on timestamp with counter fallback
+  /// - Encodes device ID in lower 24 bits
+  /// - Encodes logical milliseconds in upper 40 bits
   ///
-  /// The counter is initialized from the current timestamp in nanoseconds.
-  /// If the timestamp is not greater than the current counter, the counter
-  /// is incremented to maintain monotonicity.
+  /// The ID format: `(mix40 << 24) | dev24`
+  /// Where mix40 = (logicalMs + (dev24 << 16)) & 0xFFFF_FFFFFF
   ///
-  /// Returns: BigInt representing nanoseconds since Unix epoch (with counter guarantee)
-  static BigInt getId() {
-    // Get current timestamp in nanoseconds
-    final BigInt ns =
-        BigInt.from(DateTime.now().microsecondsSinceEpoch) * BigInt.from(1000);
+  /// Returns: int64 representing the transaction ID
+  ///
+  /// Throws: [StateError] if not initialized
+  ///
+  /// Example:
+  /// ```dart
+  /// TX.init(deviceId);
+  /// final txid = TX.nextId();
+  /// ```
+  static int nextId() {
+    if (!_initialized || _dev24 == null || _baseMsSince2025 == null) {
+      throw StateError(
+        'TX class not initialized. Call TX.init(deviceId64) first.',
+      );
+    }
 
-    // Ensure monotonicity: if timestamp is not greater, increment counter
-    now = (ns > now) ? ns : now + BigInt.one;
+    // Calculate physical milliseconds since 2025 epoch
+    final physicalMs = _baseMsSince2025! + _sw.elapsedMilliseconds;
 
-    return now;
+    // Ensure monotonicity: logical milliseconds must be >= physicalMs
+    // and always increment from last value
+    final logicalMs = max(physicalMs, _lastLogicalMs + 1);
+    _lastLogicalMs = logicalMs;
+
+    // Calculate mix40: (logicalMs + (dev24 << 16)) & 0xFFFF_FFFFFF
+    final mix40 = (logicalMs + (_dev24! << 16)) & 0xFFFF_FFFFFF;
+
+    // Return ID: (mix40 << 24) | dev24
+    return (mix40 << 24) | _dev24!;
+  }
+
+  /// Extract UTC DateTime from a generated ID
+  ///
+  /// Decodes the logical milliseconds from the ID and converts to UTC DateTime.
+  ///
+  /// Parameters:
+  /// - `id64`: The 64-bit transaction ID
+  ///
+  /// Returns: UTC DateTime representing when the ID was generated
+  ///
+  /// Example:
+  /// ```dart
+  /// final txid = TX.nextId();
+  /// final utc = TX.getUTC(txid);
+  /// ```
+  static DateTime getUTC(int id64) {
+    return GlobalIdDecoder.getUTC(id64);
+  }
+}
+
+/// Global ID Decoder for extracting information from generated IDs
+///
+/// Provides static methods to decode device ID, logical milliseconds, and
+/// UTC time from IDs generated by the TX class.
+///
+/// Example:
+/// ```dart
+/// final dev24 = GlobalIdDecoder.extractDev24(id64);
+/// final logicalMs = GlobalIdDecoder.extractLogicalMs(id64);
+/// final utc = GlobalIdDecoder.getUTC(id64);
+/// ```
+class GlobalIdDecoder {
+  /// Epoch start: January 1, 2025 (timestamp: 1735689600000 milliseconds)
+  static const int _epochMs = 1735689600000;
+
+  /// Extract the last 24 bits of device ID from an ID
+  ///
+  /// Parameters:
+  /// - `id64`: The 64-bit transaction ID
+  ///
+  /// Returns: Last 24 bits of device ID (integer)
+  ///
+  /// Example:
+  /// ```dart
+  /// final dev24 = GlobalIdDecoder.extractDev24(id64);
+  /// ```
+  static int extractDev24(int id64) {
+    return id64 & 0xFFF_FFF;
+  }
+
+  /// Extract the upper 40 bits (mix40) from an ID
+  ///
+  /// Parameters:
+  /// - `id64`: The 64-bit transaction ID
+  ///
+  /// Returns: Upper 40 bits (integer)
+  ///
+  /// Example:
+  /// ```dart
+  /// final mix40 = GlobalIdDecoder.extractMix40(id64);
+  /// ```
+  static int extractMix40(int id64) {
+    return id64 >> 24;
+  }
+
+  /// Extract logical milliseconds from an ID
+  ///
+  /// Parameters:
+  /// - `id64`: The 64-bit transaction ID
+  ///
+  /// Returns: Logical milliseconds since 2025 epoch
+  ///
+  /// Example:
+  /// ```dart
+  /// final logicalMs = GlobalIdDecoder.extractLogicalMs(id64);
+  /// ```
+  static int extractLogicalMs(int id64) {
+    final dev24 = extractDev24(id64);
+    final mix40 = extractMix40(id64);
+    return (mix40 - (dev24 << 16)) & 0xFFFF_FFFFFF;
+  }
+
+  /// Extract UTC DateTime from an ID
+  ///
+  /// Parameters:
+  /// - `id64`: The 64-bit transaction ID
+  ///
+  /// Returns: UTC DateTime representing when the ID was generated
+  ///
+  /// Example:
+  /// ```dart
+  /// final utc = GlobalIdDecoder.getUTC(id64);
+  /// ```
+  static DateTime getUTC(int id64) {
+    final logicalMs = extractLogicalMs(id64);
+    return DateTime.fromMillisecondsSinceEpoch(
+      _epochMs + logicalMs,
+      isUtc: true,
+    );
   }
 }

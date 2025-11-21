@@ -34,10 +34,9 @@ class DeleteService {
     required String primaryKeyColumn,
     required dynamic primaryKeyValue,
   }) async {
-    final deletedTxid = TX.getId();
+    final deletedTxid = TX.nextId();
 
-    // Convert BigInt to int for SQLite (BIGINT columns accept int values)
-    // SQLite INTEGER type can handle 64-bit values
+    // Use int64 directly (SQLite INTEGER type can handle 64-bit values)
     await db.customStatement(
       '''
       UPDATE $tableName 
@@ -47,7 +46,7 @@ class DeleteService {
         mtds_client_ts = ?
       WHERE $primaryKeyColumn = ?
       ''',
-      [deletedTxid.toInt(), deviceId, deletedTxid.toInt(), primaryKeyValue],
+      [deletedTxid, deviceId, deletedTxid, primaryKeyValue],
     );
 
     print(

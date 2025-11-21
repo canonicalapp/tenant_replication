@@ -1,3 +1,5 @@
+import 'dart:math';
+
 import 'package:dio/dio.dart';
 import 'package:drift/drift.dart';
 import 'models/sync_result.dart';
@@ -6,9 +8,8 @@ import 'sync/sync_service.dart';
 import 'sync/sse_service.dart';
 import 'sync/delete_service.dart';
 import 'sync/auto_sync_service.dart' show AutoSyncService, AutoSyncEvent;
-import 'helpers/pragma_helper.dart';
+import 'database/state_table_service.dart';
 import 'utils/tx.dart';
-import 'utils/mtds_utils.dart';
 
 /// Main SDK class for Multi-Tenant Data Synchronization (MTDS)
 ///
@@ -69,8 +70,8 @@ class MTDS_SDK {
   /// Base URL of the MTDS server
   final String serverUrl;
 
-  /// Unique 48-bit identifier for this device
-  /// Initialized from metadata table or generated if not provided
+  /// Unique 64-bit identifier for this device
+  /// Initialized from state table or generated if not provided
   int _deviceId = 0; // Temporary, will be set in initialize()
 
   /// Get the device ID
@@ -78,6 +79,9 @@ class MTDS_SDK {
 
   /// Stored provided device ID for initialization
   final int? _providedDeviceId;
+
+  /// State table service for device ID and client timestamp management
+  late final StateTableService _stateService;
 
   /// Sync service for uploading changes
   late final SyncService _syncService;
@@ -97,13 +101,14 @@ class MTDS_SDK {
   /// - `db`: Drift database instance
   /// - `httpClient`: Dio instance (configure with auth interceptors)
   /// - `serverUrl`: Base URL of MTDS server
-  /// - `deviceId`: Optional unique device identifier (48-bit). If not provided,
-  ///   a random device ID will be generated and stored. If a device ID already
-  ///   exists in the metadata table, it will be used regardless of this parameter.
+  /// - `deviceId`: Optional unique device identifier (64-bit). If not provided,
+  ///   a random 64-bit device ID will be generated and stored. If a device ID already
+  ///   exists in the state table, it will be used regardless of this parameter.
   ///
   /// The SDK will:
-  /// 1. Initialize or retrieve deviceId from metadata table
-  /// 2. Initialize internal services
+  /// 1. Initialize or retrieve deviceId from state table
+  /// 2. Initialize TX class for ID generation
+  /// 3. Initialize internal services
   ///
   /// Example:
   /// ```dart
@@ -112,10 +117,10 @@ class MTDS_SDK {
   ///   db: AppDatabase(),
   ///   httpClient: Dio(),
   ///   serverUrl: 'https://api.example.com',
-  ///   deviceId: 123456789012,
+  ///   deviceId: 12345678901234567890,
   /// );
   ///
-  /// // Without device ID (will generate random)
+  /// // Without device ID (will generate random 64-bit)
   /// final sdk = MTDS_SDK(
   ///   db: AppDatabase(),
   ///   httpClient: Dio(),
@@ -134,11 +139,12 @@ class MTDS_SDK {
   /// Initialize SDK asynchronously (call after construction)
   ///
   /// This method:
-  /// 1. Checks if device ID exists in metadata table
+  /// 1. Checks if device ID exists in state table
   /// 2. Uses existing device ID if found (never changes it)
-  /// 3. Uses provided device ID or generates random if not found
-  /// 4. Stores device ID in metadata table
-  /// 5. Initializes internal services
+  /// 3. Uses provided device ID or generates random 64-bit if not found
+  /// 4. Stores device ID in state table with Attribute 'mtds:DeviceID'
+  /// 5. Initializes TX class with device ID
+  /// 6. Initializes internal services
   ///
   /// Example:
   /// ```dart
@@ -146,27 +152,43 @@ class MTDS_SDK {
   /// await sdk.initialize();
   /// ```
   Future<void> initialize() async {
-    // Check if device ID already exists in metadata
-    final existing = await PragmaHelper.getDeviceId(db);
+    // Initialize state table service
+    _stateService = StateTableService(db: db);
 
-    if (existing != null) {
+    // Check if device ID already exists in state table
+    final existing = await _stateService.getNumValue('mtds:DeviceID');
+
+    if (existing != 0) {
       // Use existing device ID (never change it)
       _deviceId = existing;
-      print('✅ Using existing DeviceID from metadata: $_deviceId');
+      print('✅ Using existing DeviceID from state table: $_deviceId');
     } else {
-      // No existing device ID - use provided or generate random
-      final deviceIdToUse =
-          _providedDeviceId ?? MtdsUtils.generateRandomDeviceId();
-      MtdsUtils.validateDeviceId(deviceIdToUse);
+      // No existing device ID - use provided or generate random 64-bit
+      final deviceIdToUse = _providedDeviceId ?? _generateRandom64BitDeviceId();
       _deviceId = deviceIdToUse;
 
-      // Store in metadata table
-      await PragmaHelper.setDeviceId(db, _deviceId);
-      print('📝 Stored new DeviceID in metadata: $_deviceId');
+      // Store in state table
+      await _stateService.upsertNumValue('mtds:DeviceID', _deviceId);
+      print('📝 Stored new DeviceID in state table: $_deviceId');
     }
+
+    // Initialize TX class with device ID
+    TX.init(_deviceId);
 
     // Now initialize services with the device ID
     _initializeServices();
+  }
+
+  /// Generate a random 64-bit device ID
+  ///
+  /// Returns a random integer between 1 and 2^64-1 (inclusive).
+  /// Uses cryptographically secure random number generator.
+  int _generateRandom64BitDeviceId() {
+    final random = Random.secure();
+    // Generate random 64-bit value (avoid 0)
+    final deviceId =
+        random.nextInt(0x7FFFFFFFFFFFFFFF) + random.nextInt(0x7FFFFFFFFFFFFFFF);
+    return deviceId == 0 ? 1 : deviceId;
   }
 
   /// Initialize internal services
@@ -351,16 +373,18 @@ class MTDS_SDK {
   // Utilities
   // ═══════════════════════════════════════════════════════════════
 
-  /// Generate a new TXID (monotonic counter in nanoseconds)
+  /// Generate a new TXID (monotonic counter with device ID encoding)
   ///
-  /// Returns a unique, strictly increasing BigInt value for transaction ordering.
+  /// Returns a unique, strictly increasing 64-bit integer for transaction ordering.
+  /// The ID encodes device ID and can be decoded to extract UTC time.
   ///
   /// Example:
   /// ```dart
   /// final txid = sdk.generateTxid();
+  /// final utc = TX.getUTC(txid);
   /// ```
-  BigInt generateTxid() {
-    return TX.getId();
+  int generateTxid() {
+    return TX.nextId();
   }
 
   /// Dispose resources

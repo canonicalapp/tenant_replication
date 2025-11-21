@@ -4,7 +4,6 @@ import 'state_table_service.dart';
 import 'trigger_manager.dart';
 
 const _metadataTable = 'mtds_metadata';
-const _deviceIdKey = 'device_id';
 const _changeLogTable = 'mtds_change_log';
 const _stateTable = 'mtds_state';
 
@@ -117,9 +116,6 @@ class SchemaManager {
     if (result.isEmpty) return null;
     return result.first.data['value'] as String?;
   }
-
-  /// Returns the device-id key string (shared across helpers / triggers).
-  static String get deviceIdKey => _deviceIdKey;
 
   static Future<void> _migrateChangeLogSchema(GeneratedDatabase db) async {
     final columns =

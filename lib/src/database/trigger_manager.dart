@@ -2,8 +2,9 @@ import 'package:drift/drift.dart';
 
 import '../models/server_events.dart';
 
+// Read device ID from state table (triggers use raw SQL as required)
 const String _deviceIdSelect =
-    "(SELECT CAST(value AS INTEGER) FROM mtds_metadata WHERE key = 'device_id')";
+    "(SELECT numValue FROM mtds_state WHERE attribute = 'mtds:DeviceID')";
 
 class TriggerManager {
   /// Setup triggers on the provided Drift database
@@ -19,13 +20,13 @@ class TriggerManager {
   static Future<void> setupTriggers(GeneratedDatabase db) async {
     print("🔄 Setting up triggers...");
 
-    // Get all tables except system tables and mtds_change_log
+    // Get all tables except system tables and MTDS internal tables
     final tablesResult =
         await db.customSelect('''
       SELECT name FROM sqlite_master 
       WHERE type = 'table' 
         AND name NOT LIKE 'sqlite_%' 
-        AND name NOT IN ('mtds_change_log', 'mtds_metadata')
+        AND name NOT IN ('mtds_change_log', 'mtds_metadata', 'mtds_state')
     ''').get();
 
     List<Map<String, dynamic>> tables =
@@ -81,7 +82,7 @@ class TriggerManager {
           FOR EACH ROW
           WHEN NEW.mtds_device_id = 0 OR NEW.mtds_device_id IS NULL
           BEGIN
-            -- Attempt to set mtds_device_id from metadata
+            -- Attempt to set mtds_device_id from state table
             -- Note: This may not work in all SQLite versions
             -- Application code should set mtds_device_id to ensure it's set
             SELECT $_deviceIdSelect;
@@ -89,7 +90,7 @@ class TriggerManager {
         ''');
 
         // AFTER INSERT Trigger - Log changes to change log
-        // Only capture local writes by matching metadata device_id
+        // Only capture local writes by matching state table device_id
         await db.customStatement('''
           CREATE TRIGGER IF NOT EXISTS mtds_trigger_${tableName}_insert
           AFTER INSERT ON $tableName
@@ -111,7 +112,7 @@ class TriggerManager {
         ''');
 
         // AFTER UPDATE Trigger - Log changes to change log
-        // Only capture local writes by matching metadata device_id
+        // Only capture local writes by matching state table device_id
         await db.customStatement('''
           CREATE TRIGGER IF NOT EXISTS mtds_trigger_${tableName}_update
           AFTER UPDATE ON $tableName

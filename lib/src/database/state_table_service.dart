@@ -1,3 +1,5 @@
+import 'dart:math';
+
 import 'package:drift/drift.dart';
 
 /// Service for managing the `mtds_state` table.
@@ -109,5 +111,42 @@ class StateTableService {
 
     if (result.isEmpty) return null;
     return result.first.data['textValue'] as String?;
+  }
+
+  /// Get the next client timestamp with monotonic guarantee.
+  ///
+  /// Updates the `'mtds:client_ts'` attribute in the state table using:
+  /// `MAX(numValue + 1, current_time_ms - 1735689600000)`
+  ///
+  /// This ensures:
+  /// - Monotonic increment (always increases)
+  /// - Never decreases even if system clock goes backwards
+  /// - Returns timestamp in milliseconds since client epoch (January 1, 2025)
+  ///
+  /// Returns:
+  /// - The updated client timestamp as BigInt (milliseconds since 2025 epoch)
+  ///
+  /// Example:
+  /// ```dart
+  /// final clientTs = await service.getNextClientTimestamp();
+  /// ```
+  Future<BigInt> getNextClientTimestamp() async {
+    // Epoch start: January 1, 2025 (timestamp: 1735689600000 milliseconds)
+    const int epochMs = 1735689600000;
+
+    // Calculate current time since epoch in milliseconds
+    final now = DateTime.now().millisecondsSinceEpoch;
+    final currentTimeSinceEpoch = now - epochMs;
+
+    // Get current value (or 0 if not exists)
+    final currentValue = await getNumValue('mtds:client_ts');
+
+    // Calculate new value: MAX(currentValue + 1, currentTimeSinceEpoch)
+    final newValue = max(currentValue + 1, currentTimeSinceEpoch);
+
+    // Update state table atomically
+    await upsertNumValue('mtds:client_ts', newValue);
+
+    return BigInt.from(newValue);
   }
 }
