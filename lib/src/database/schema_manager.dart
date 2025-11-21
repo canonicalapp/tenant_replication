@@ -1,10 +1,12 @@
 import 'package:drift/drift.dart';
 
+import 'state_table_service.dart';
 import 'trigger_manager.dart';
 
 const _metadataTable = 'mtds_metadata';
 const _deviceIdKey = 'device_id';
 const _changeLogTable = 'mtds_change_log';
+const _stateTable = 'mtds_state';
 
 /// Utility methods that prepare MTDS metadata inside a consumer's Drift database.
 class SchemaManager {
@@ -37,12 +39,49 @@ class SchemaManager {
     await _migrateChangeLogSchema(db);
   }
 
-  /// Full preparation flow: create metadata + change log tables, then attach triggers.
+  /// Ensures the MTDS state table exists for storing SDK state values.
+  static Future<void> ensureStateTable(GeneratedDatabase db) async {
+    await db.customStatement('''
+      CREATE TABLE IF NOT EXISTS $_stateTable (
+        attribute TEXT PRIMARY KEY,
+        numValue INTEGER NOT NULL DEFAULT 0,
+        textValue TEXT
+      );
+    ''');
+
+    // Initialize core attributes if they don't exist
+    final stateService = StateTableService(db: db);
+    await _initializeStateTableAttributes(stateService);
+  }
+
+  /// Initialize core state table attributes.
+  static Future<void> _initializeStateTableAttributes(
+    StateTableService stateService,
+  ) async {
+    // Check if attributes exist, if not insert them
+    final clientTs = await stateService.getNumValue('mtds:client_ts');
+    if (clientTs == 0) {
+      await stateService.upsertNumValue('mtds:client_ts', 0);
+    }
+
+    final lastSyncTs = await stateService.getTextValue('mtds:lastSyncTS');
+    if (lastSyncTs == null) {
+      await stateService.upsertTextValue('mtds:lastSyncTS', null);
+    }
+
+    final deviceId = await stateService.getNumValue('mtds:DeviceID');
+    if (deviceId == 0) {
+      await stateService.upsertNumValue('mtds:DeviceID', 0);
+    }
+  }
+
+  /// Full preparation flow: create metadata + change log + state tables, then attach triggers.
   ///
   /// Call this after migrations have run so that user tables exist.
   static Future<void> prepareDatabase(GeneratedDatabase db) async {
     await ensureMetadataTable(db);
     await ensureChangeLogTable(db);
+    await ensureStateTable(db);
     await TriggerManager.setupTriggers(db);
   }
 

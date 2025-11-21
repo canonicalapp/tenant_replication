@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'package:dio/dio.dart';
 import 'package:drift/drift.dart';
 import '../models/sync_result.dart';
+import '../utils/bigint_utils.dart';
 
 /// Service for handling synchronization with the server
 ///
@@ -138,10 +139,12 @@ class SyncService {
           await db.customStatement('DELETE FROM mtds_change_log');
         } else if (processed > 0) {
           // Remove only successfully processed changes from log
+          // Convert clientTxid to BigInt, then to int for change log comparison
           final processedClientTxids =
               serverUpdates
-                  ?.map((u) => u['clientTxid'] as int?)
-                  .whereType<int>()
+                  ?.map((u) => BigIntUtils.toBigInt(u['clientTxid']))
+                  .whereType<BigInt>()
+                  .map((b) => b.toInt())
                   .toList() ??
               [];
           if (processedClientTxids.isNotEmpty) {
@@ -284,17 +287,22 @@ class SyncService {
 
     for (final update in serverUpdates) {
       try {
-        final clientTxid = update['clientTxid'] as int;
-        final serverTxid = update['serverTxid'] as int;
+        final clientTxid = BigIntUtils.toBigInt(update['clientTxid']);
+        final serverTxid = BigIntUtils.toBigInt(update['serverTxid']);
         final tableName = update['tableName'] as String;
         final pk = update['pk'];
 
+        if (clientTxid == null || serverTxid == null) {
+          print('⚠️ Skipping update: missing clientTxid or serverTxid');
+          continue;
+        }
+
         // Clock skew detection
         final skew = serverTxid - clientTxid;
-        if (skew.abs() > 5000000000) {
+        if (skew.abs() > BigInt.from(5000000000)) {
           // More than 5 seconds difference
           print(
-            '⚠️ Clock skew detected: ${skew ~/ 1000000}ms '
+            '⚠️ Clock skew detected: ${skew ~/ BigInt.from(1000000)}ms '
             '(client: $clientTxid, server: $serverTxid)',
           );
         }
@@ -317,9 +325,10 @@ class SyncService {
                 as String;
 
         // Update local record with server timestamp
+        // Convert BigInt to int for SQLite (SQLite INTEGER can handle 64-bit)
         await db.customStatement(
-          'UPDATE $tableName SET mtds_last_updated_txid = ? WHERE $pkColumn = ?',
-          [serverTxid, pk],
+          'UPDATE $tableName SET mtds_server_ts = ? WHERE $pkColumn = ?',
+          [serverTxid.toInt(), pk],
         );
 
         print('✅ Updated $tableName[$pkColumn=$pk]: $clientTxid → $serverTxid');
@@ -344,7 +353,7 @@ class SyncService {
         final newData = payload['New'] as Map<String, dynamic>?;
         if (newData == null) continue;
 
-        final deletedTxid = newData['mtds_deleted_txid'];
+        final deletedTxid = newData['mtds_delete_ts'];
         if (deletedTxid != null) {
           final tableName = change['table_name'] as String;
           final pk = change['record_pk'];
@@ -436,18 +445,9 @@ class SyncService {
     for (final row in rows) {
       final pkValue = row[pkName];
 
-      // Handle serverTxid - could be int, String, or null
-      int? serverTxid;
-      final serverTxidRaw = row['mtds_last_updated_txid'];
-      if (serverTxidRaw != null) {
-        if (serverTxidRaw is int) {
-          serverTxid = serverTxidRaw;
-        } else if (serverTxidRaw is String) {
-          serverTxid = int.tryParse(serverTxidRaw);
-        } else if (serverTxidRaw is num) {
-          serverTxid = serverTxidRaw.toInt();
-        }
-      }
+      // Handle serverTxid - convert to BigInt using utility
+      final serverTxidRaw = row['mtds_server_ts'];
+      final serverTxid = BigIntUtils.toBigInt(serverTxidRaw);
 
       if (pkValue == null) {
         print('   ⚠️ Skipping row: missing PK value ($pkName)');
@@ -458,8 +458,8 @@ class SyncService {
 
       if (serverTxid == null) {
         print(
-          '   ⚠️ Skipping row: missing or invalid mtds_last_updated_txid for PK=$pkValue '
-          '(value: $serverTxidRaw, type: ${serverTxidRaw.runtimeType})',
+          '   ⚠️ Skipping row: missing or invalid mtds_server_ts for PK=$pkValue '
+          '(value: $serverTxidRaw, type: ${serverTxidRaw?.runtimeType})',
         );
         skipped++;
         continue;
@@ -468,25 +468,18 @@ class SyncService {
       final existing =
           await db
               .customSelect(
-                'SELECT mtds_last_updated_txid AS txid FROM $tableName WHERE $pkName = ?',
+                'SELECT mtds_client_ts AS txid FROM $tableName WHERE $pkName = ?',
                 variables: [_variableForValue(pkValue)],
               )
               .get();
 
-      // Handle localTxid - could be int or null from database
-      int? localTxid;
-      if (!existing.isEmpty) {
-        final txidValue = existing.first.data['txid'];
-        if (txidValue is int) {
-          localTxid = txidValue;
-        } else if (txidValue is String) {
-          localTxid = int.tryParse(txidValue);
-        } else if (txidValue is num) {
-          localTxid = txidValue.toInt();
-        }
-      }
+      // Handle localTxid - convert to BigInt using utility
+      final localTxidRaw =
+          existing.isEmpty ? null : existing.first.data['txid'];
+      final localTxid = BigIntUtils.toBigInt(localTxidRaw);
 
-      if (localTxid != null && localTxid >= serverTxid) {
+      if (localTxid != null &&
+          BigIntUtils.isGreaterOrEqual(localTxid, serverTxid)) {
         print(
           '   ⏭️ Skipping $tableName[$pkName=$pkValue]: '
           'local txid ($localTxid) >= server txid ($serverTxid)',

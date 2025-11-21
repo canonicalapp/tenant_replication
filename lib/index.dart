@@ -14,6 +14,7 @@ export 'src/helpers/pragma_helper.dart';
 // Export utilities
 export 'src/utils/mtds_utils.dart';
 export 'src/utils/tx.dart';
+export 'src/utils/bigint_utils.dart';
 
 // Export models
 export 'src/models/sync_result.dart';

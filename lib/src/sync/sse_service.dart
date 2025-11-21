@@ -6,6 +6,7 @@ import 'package:dio/dio.dart';
 import 'package:drift/drift.dart';
 
 import '../models/server_events.dart';
+import '../utils/bigint_utils.dart';
 
 /// Service for handling Server-Sent Events (SSE)
 ///
@@ -246,15 +247,18 @@ class SSEService {
     try {
       final tableName = event.table!;
       final payload = Map<String, dynamic>.from(event.data!);
-      final recordDeviceId = payload['mtds_device_id'] as int?;
+      // Handle device ID - convert to BigInt using utility
+      final recordDeviceId = BigIntUtils.toBigInt(payload['mtds_device_id']);
 
       // Prevent loop: Don't apply updates from this device
-      if (recordDeviceId == deviceId) {
+      if (recordDeviceId != null &&
+          BigIntUtils.equals(recordDeviceId, BigInt.from(deviceId))) {
         print('⏭️ Skipping update from this device ($deviceId)');
         return;
       }
 
-      final recordTxid = payload['mtds_last_updated_txid'] as int?;
+      // Handle client timestamp - convert to BigInt using utility
+      final recordTxid = BigIntUtils.toBigInt(payload['mtds_client_ts']);
 
       String? pkColumnName =
           event.pkColumn ?? payload.remove('pkColumn') as String?;
@@ -277,6 +281,7 @@ class SSEService {
         return;
       }
 
+      // recordTxid is guaranteed to be non-null after the check above
       // Check if local record exists and compare timestamps
       final tableInfo =
           await db.customSelect('PRAGMA table_info($tableName)').get();
@@ -285,7 +290,7 @@ class SSEService {
       final existing =
           await db
               .customSelect(
-                'SELECT mtds_last_updated_txid AS txid FROM $tableName WHERE $pkColumnName = ?',
+                'SELECT mtds_client_ts AS txid FROM $tableName WHERE $pkColumnName = ?',
                 variables: [_variableForValue(pkValue)],
               )
               .get();
@@ -293,9 +298,14 @@ class SSEService {
       // Apply update if:
       // 1. Record doesn't exist locally, OR
       // 2. Server timestamp is newer than local timestamp
+      final existingTxidRaw =
+          existing.isEmpty ? null : existing.first.data['txid'];
+      final existingTxid = BigIntUtils.toBigInt(existingTxidRaw);
+
+      // recordTxid is guaranteed to be non-null here due to earlier check
       if (existing.isEmpty ||
-          existing.first.data['txid'] == null ||
-          recordTxid > (existing.first.data['txid'] as int)) {
+          existingTxid == null ||
+          BigIntUtils.isGreater(recordTxid, existingTxid)) {
         // Build INSERT OR REPLACE statement
         final columns =
             tableInfo.map((col) => col.data['name'] as String).toList();

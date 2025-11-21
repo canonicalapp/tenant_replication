@@ -100,7 +100,7 @@ class TriggerManager {
           BEGIN
               INSERT INTO mtds_change_log (txid, table_name, record_pk, mtds_device_id, action, payload)
               VALUES (
-                NEW.mtds_last_updated_txid,
+                NEW.mtds_client_ts,
                 '$tableName',
                 $pkValueExpression,
                 NEW.mtds_device_id,
@@ -118,13 +118,13 @@ class TriggerManager {
           FOR EACH ROW
           WHEN (
             (
-              OLD.mtds_last_updated_txid <> NEW.mtds_last_updated_txid 
+              OLD.mtds_client_ts <> NEW.mtds_client_ts 
               AND COALESCE($_deviceIdSelect, -1) = NEW.mtds_device_id
             )
             OR
             (
-              OLD.mtds_deleted_txid IS NULL 
-              AND NEW.mtds_deleted_txid IS NOT NULL 
+              OLD.mtds_delete_ts IS NULL 
+              AND NEW.mtds_delete_ts IS NOT NULL 
               AND COALESCE($_deviceIdSelect, -1) = NEW.mtds_device_id
             )
           )
@@ -132,14 +132,14 @@ class TriggerManager {
               INSERT INTO mtds_change_log (txid, table_name, record_pk, mtds_device_id, action, payload)
               VALUES (
                 CASE 
-                  WHEN OLD.mtds_deleted_txid IS NULL AND NEW.mtds_deleted_txid IS NOT NULL THEN NEW.mtds_deleted_txid 
-                  ELSE NEW.mtds_last_updated_txid 
+                  WHEN OLD.mtds_delete_ts IS NULL AND NEW.mtds_delete_ts IS NOT NULL THEN NEW.mtds_delete_ts 
+                  ELSE NEW.mtds_client_ts 
                 END,
                 '$tableName',
                 $pkValueExpression,
                 NEW.mtds_device_id,
                 CASE 
-                  WHEN OLD.mtds_deleted_txid IS NULL AND NEW.mtds_deleted_txid IS NOT NULL THEN '${ServerAction.delete.name}' 
+                  WHEN OLD.mtds_delete_ts IS NULL AND NEW.mtds_delete_ts IS NOT NULL THEN '${ServerAction.delete.name}' 
                   ELSE '${ServerAction.update.name}' 
                 END,
                 json_object('New', json_object($newJsonFields), 'old', json_object($oldJsonFields))

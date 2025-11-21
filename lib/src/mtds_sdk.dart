@@ -72,7 +72,7 @@ class MTDS_SDK {
   /// Unique 48-bit identifier for this device
   /// Initialized from metadata table or generated if not provided
   int _deviceId = 0; // Temporary, will be set in initialize()
-  
+
   /// Get the device ID
   int get deviceId => _deviceId;
 
@@ -148,22 +148,23 @@ class MTDS_SDK {
   Future<void> initialize() async {
     // Check if device ID already exists in metadata
     final existing = await PragmaHelper.getDeviceId(db);
-    
+
     if (existing != null) {
       // Use existing device ID (never change it)
       _deviceId = existing;
       print('✅ Using existing DeviceID from metadata: $_deviceId');
     } else {
       // No existing device ID - use provided or generate random
-      final deviceIdToUse = _providedDeviceId ?? MtdsUtils.generateRandomDeviceId();
+      final deviceIdToUse =
+          _providedDeviceId ?? MtdsUtils.generateRandomDeviceId();
       MtdsUtils.validateDeviceId(deviceIdToUse);
       _deviceId = deviceIdToUse;
-      
+
       // Store in metadata table
       await PragmaHelper.setDeviceId(db, _deviceId);
       print('📝 Stored new DeviceID in metadata: $_deviceId');
     }
-    
+
     // Now initialize services with the device ID
     _initializeServices();
   }
@@ -196,7 +197,7 @@ class MTDS_SDK {
 
   /// Soft delete: Mark record for deletion and sync to server
   ///
-  /// Sets `mtds_deleted_txid` to mark the record as deleted.
+  /// Sets `mtds_delete_ts` to mark the record as deleted.
   /// The record remains in the database and will be synced to the server.
   /// After successful sync, the record is permanently removed.
   ///

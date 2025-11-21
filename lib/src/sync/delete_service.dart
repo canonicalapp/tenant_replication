@@ -13,7 +13,7 @@ class DeleteService {
 
   /// Soft delete: Mark record for deletion and sync to server
   ///
-  /// Sets `mtds_deleted_txid` to mark the record as deleted.
+  /// Sets `mtds_delete_ts` to mark the record as deleted.
   /// The record remains in the database and will be synced to the server.
   ///
   /// Parameters:
@@ -36,13 +36,15 @@ class DeleteService {
   }) async {
     final deletedTxid = TX.getId();
 
+    // Convert BigInt to int for SQLite (BIGINT columns accept int values)
+    // SQLite INTEGER type can handle 64-bit values
     await db.customStatement(
       '''
       UPDATE $tableName 
       SET 
-        mtds_deleted_txid = ?,
+        mtds_delete_ts = ?,
         mtds_device_id = ?,
-        mtds_last_updated_txid = ?
+        mtds_client_ts = ?
       WHERE $primaryKeyColumn = ?
       ''',
       [deletedTxid.toInt(), deviceId, deletedTxid.toInt(), primaryKeyValue],
@@ -53,5 +55,4 @@ class DeleteService {
       'marked with DeletedTXID=$deletedTxid',
     );
   }
-
 }
