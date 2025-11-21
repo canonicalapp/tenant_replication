@@ -1,0 +1,40 @@
+name: mtds_example
+description: Example app demonstrating mtds SDK usage
+publish_to: 'none'
+version: 1.0.0+1
+
+environment:
+  sdk: ^3.7.0
+  flutter: '>=1.17.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+  # Reference the parent library
+  mtds:
+    path: ../
+
+  # Required for MTDS SDK (peer dependencies)
+  drift: ^2.13.0
+  dio: ^5.9.0
+  sqlite3_flutter_libs: ^0.5.19
+  path_provider: ^2.1.0 # Required by Drift for database location
+  path: ^1.9.1 # Required by Drift for path manipulation
+
+  # UI dependencies
+  cupertino_icons: ^1.0.2
+
+  # JWT for testing
+  jwt_decoder: ^2.0.1
+  crypto: ^3.0.3
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^5.0.0
+  drift_dev: ^2.29.0
+  build_runner: ^2.4.0
+
+flutter:
+  uses-material-design: true
