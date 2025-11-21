@@ -8,6 +8,9 @@ export 'src/database/trigger_manager.dart';
 export 'src/database/schema_manager.dart';
 export 'src/database/mtds_columns.dart';
 
+// Export helpers
+export 'src/helpers/record_helper.dart';
+
 // Export utilities
 export 'src/utils/mtds_utils.dart';
 export 'src/utils/tx.dart';

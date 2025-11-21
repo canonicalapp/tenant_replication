@@ -6,6 +6,9 @@ import '../models/server_events.dart';
 const String _deviceIdSelect =
     "(SELECT numValue FROM mtds_state WHERE attribute = 'mtds:DeviceID')";
 
+// Client epoch: January 1, 2025 (timestamp: 1735689600000 milliseconds)
+const int _clientEpochMs = 1735689600000;
+
 class TriggerManager {
   /// Setup triggers on the provided Drift database
   ///
@@ -72,20 +75,60 @@ class TriggerManager {
       try {
         await _dropTriggersForTable(db, tableName);
 
-        // BEFORE INSERT Trigger - Populate mtds_device_id automatically
-        // Note: SQLite BEFORE INSERT triggers have limited ability to modify NEW.column
-        // Application code should set mtds_device_id before insert for maximum compatibility
-        // This trigger serves as documentation and may work in some SQLite versions
+        // BEFORE INSERT Trigger - Update client timestamp
+        // Note: SQLite BEFORE INSERT triggers update the state table atomically
+        // Application code should read the updated timestamp and set mtds_client_ts and mtds_device_id
+        // This ensures monotonic timestamp increments even under concurrent operations
+        // **Why Triggers Update State Table But Don't Set NEW Values:**
+        //
+        // SQLite triggers have limitations that prevent direct assignment to NEW values:
+        // 1. No RETURNING clause in UPDATE statements
+        // 2. Complex syntax for modifying NEW values (unreliable across SQLite versions)
+        // 3. Limited support for complex bitwise operations needed for PK generation
+        //
+        // **Solution**: Hybrid approach
+        // - Triggers: Update state table atomically (ensures monotonic timestamps under concurrency)
+        // - Application: Use RecordHelper.prepareForInsert() to set mtds_device_id and mtds_client_ts
+        //
+        // This ensures:
+        // - Atomic state table updates (triggers handle this)
+        // - Correct values set before insert (RecordHelper handles this)
+        // - Works reliably across all SQLite versions
+        //
+        // See RecordHelper documentation for details on why this approach is used.
         await db.customStatement('''
           CREATE TRIGGER IF NOT EXISTS mtds_trigger_${tableName}_insert_before
           BEFORE INSERT ON $tableName
           FOR EACH ROW
-          WHEN NEW.mtds_device_id = 0 OR NEW.mtds_device_id IS NULL
           BEGIN
-            -- Attempt to set mtds_device_id from state table
-            -- Note: This may not work in all SQLite versions
-            -- Application code should set mtds_device_id to ensure it's set
-            SELECT $_deviceIdSelect;
+            -- Update client timestamp in state table (monotonic increment)
+            UPDATE mtds_state
+            SET numValue = MAX(
+              COALESCE((SELECT numValue FROM mtds_state WHERE attribute = 'mtds:client_ts'), 0) + 1,
+              CAST((julianday('now', 'subsec') * 86400000 - $_clientEpochMs) AS INTEGER)
+            )
+            WHERE attribute = 'mtds:client_ts';
+          END;
+        ''');
+
+        // BEFORE UPDATE Trigger - Update client timestamp atomically
+        //
+        // Similar to BEFORE INSERT trigger, this updates the state table atomically.
+        // Application code should use RecordHelper.prepareForUpdate() to set values.
+        await db.customStatement('''
+          CREATE TRIGGER IF NOT EXISTS mtds_trigger_${tableName}_update_before
+          BEFORE UPDATE ON $tableName
+          FOR EACH ROW
+          BEGIN
+            -- Update client timestamp in state table (monotonic increment)
+            -- This ensures atomic updates even under concurrent operations
+            -- Application code (RecordHelper) will read this value and set NEW.mtds_client_ts
+            UPDATE mtds_state
+            SET numValue = MAX(
+              COALESCE((SELECT numValue FROM mtds_state WHERE attribute = 'mtds:client_ts'), 0) + 1,
+              CAST((julianday('now', 'subsec') * 86400000 - $_clientEpochMs) AS INTEGER)
+            )
+            WHERE attribute = 'mtds:client_ts';
           END;
         ''');
 
@@ -166,12 +209,15 @@ Future<void> _dropTriggersForTable(
   await db.customStatement(
     'DROP TRIGGER IF EXISTS trigger_${tableName}_update;',
   );
-  // Drop new naming
+  // Drop new naming - all trigger types
   await db.customStatement(
     'DROP TRIGGER IF EXISTS mtds_trigger_${tableName}_insert_before;',
   );
   await db.customStatement(
     'DROP TRIGGER IF EXISTS mtds_trigger_${tableName}_insert;',
+  );
+  await db.customStatement(
+    'DROP TRIGGER IF EXISTS mtds_trigger_${tableName}_update_before;',
   );
   await db.customStatement(
     'DROP TRIGGER IF EXISTS mtds_trigger_${tableName}_update;',

@@ -9,6 +9,7 @@ import 'sync/sse_service.dart';
 import 'sync/delete_service.dart';
 import 'sync/auto_sync_service.dart' show AutoSyncService, AutoSyncEvent;
 import 'database/state_table_service.dart';
+import 'helpers/record_helper.dart';
 import 'utils/tx.dart';
 
 /// Main SDK class for Multi-Tenant Data Synchronization (MTDS)
@@ -44,6 +45,38 @@ import 'utils/tx.dart';
 /// await sdk.softDelete(...);
 /// final result = await sdk.syncToServer();
 /// final stream = sdk.subscribeToSSE();
+/// ```
+///
+/// ## Preparing Records for Insert/Update
+///
+/// Before inserting or updating records, you must populate MTDS columns:
+/// - `mtds_device_id`: Device identifier
+/// - `mtds_client_ts`: Client-generated timestamp
+///
+/// Use the `recordHelper` to automatically populate these values:
+///
+/// ```dart
+/// // Prepare record for insert
+/// final record = {'name': 'John', 'email': 'john@example.com'};
+/// final prepared = await sdk.recordHelper.prepareForInsert(
+///   record,
+///   primaryKeyColumn: 'id', // Optional: generates PK if not set
+/// );
+/// await db.into(users).insert(UsersCompanion.fromJson(prepared));
+///
+/// // Prepare record for update
+/// final updateData = {'name': 'Jane'};
+/// final preparedUpdate = await sdk.recordHelper.prepareForUpdate(updateData);
+/// await (db.update(users)..where((u) => u.id.equals(123)))
+///     .write(UsersCompanion.fromJson(preparedUpdate));
+/// ```
+///
+/// **Why Application-Level Helpers?**
+///
+/// SQLite triggers have limitations that prevent direct assignment to NEW values.
+/// The triggers still update the state table atomically (ensuring monotonic timestamps),
+/// but application-level helpers ensure values are set correctly before operations.
+/// See `RecordHelper` documentation for details.
 /// ```
 ///
 /// ## Authentication
@@ -82,6 +115,19 @@ class MTDS_SDK {
 
   /// State table service for device ID and client timestamp management
   late final StateTableService _stateService;
+
+  /// Record helper for preparing records with MTDS columns
+  ///
+  /// Use this helper to automatically populate `mtds_device_id`, `mtds_client_ts`,
+  /// and generate primary keys before insert/update operations.
+  ///
+  /// Example:
+  /// ```dart
+  /// final record = {'name': 'John', 'email': 'john@example.com'};
+  /// final prepared = await sdk.recordHelper.prepareForInsert(record, primaryKeyColumn: 'id');
+  /// await db.into(users).insert(UsersCompanion.fromJson(prepared));
+  /// ```
+  late final RecordHelper recordHelper;
 
   /// Sync service for uploading changes
   late final SyncService _syncService;
@@ -174,6 +220,12 @@ class MTDS_SDK {
 
     // Initialize TX class with device ID
     TX.init(_deviceId);
+
+    // Initialize record helper for preparing records
+    recordHelper = RecordHelper(
+      stateService: _stateService,
+      deviceId: _deviceId,
+    );
 
     // Now initialize services with the device ID
     _initializeServices();
