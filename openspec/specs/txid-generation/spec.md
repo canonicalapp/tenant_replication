@@ -1,63 +1,125 @@
 ## Purpose
 
-Provides unique transaction ID generation using monotonic counters for ordering and conflict resolution in synchronization operations.
+Provides unique ID generation using the TX class with device ID encoding, monotonic guarantees, and UTC time extraction capabilities.
 
 ## Requirements
 
-### Requirement: Transaction ID Generation
+### Requirement: TX Class for ID Generation
 
-The SDK SHALL generate unique transaction IDs (TXID) for ordering and conflict resolution using a monotonic counter class in the utils module.
-
-TXID generation SHALL:
-
-- Be implemented as a `TX` class in the utils module
-- Use a monotonic counter to guarantee uniqueness
-- Use BigInt for large value support
-- Combine timestamp with counter for ordering
-- Ensure thread-safety if needed
-
-#### Scenario: Unique TXID generation from utils
-
-- **WHEN** `TX.getId()` is called from the utils module
-- **THEN** a unique BigInt value SHALL be returned
-- **AND** subsequent calls SHALL return strictly increasing values
-- **AND** uniqueness SHALL be guaranteed even under concurrent operations
-- **AND** the implementation SHALL be located in the utils module
-
-#### Scenario: Monotonic ordering
-
-- **WHEN** multiple TXIDs are generated via `TX.getId()`
-- **THEN** each TXID SHALL be greater than the previous
-- **AND** ordering SHALL be preserved across app restarts (if counter is persisted)
-
-#### Scenario: Timestamp-based initialization
-
-- **WHEN** counter is initialized in the `TX` class
-- **THEN** counter SHALL start from current timestamp in nanoseconds
-- **AND** if timestamp is less than current counter, counter SHALL increment
-- **AND** the counter state SHALL be maintained in the utils module
-
-### Requirement: Monotonic ID Generation in Utils
-
-The SDK SHALL provide a `TX` class in the utils module for generating monotonic transaction IDs.
+The SDK SHALL provide a `TX` class in the utils module for generating unique IDs that encode device ID and can be decoded to extract UTC time.
 
 The `TX` class SHALL:
 
 - Be located in the utils module (e.g., `lib/src/utils/`)
-- Provide a static `getId()` method that returns a unique BigInt
-- Maintain a static counter that ensures monotonic ordering
-- Initialize counter from timestamp on first use
+- Use epoch starting at January 1, 2025 (timestamp: 1735689600000 milliseconds)
+- Encode the last 24 bits of device ID in the generated ID
+- Maintain monotonic ordering (strictly increasing)
+- Support initialization with 64-bit device ID
+- Provide `nextId()` method that returns a 64-bit integer
+- Provide `getUTC(id64)` static method to extract UTC DateTime from an ID
 
-#### Scenario: TX class location
+#### Scenario: TX class initialization
 
-- **WHEN** the SDK is used
-- **THEN** the `TX` class SHALL be available in the utils module
-- **AND** it SHALL be importable from the SDK's utils exports
+- **WHEN** `TX.init(deviceId64)` is called with a 64-bit device ID
+- **THEN** the last 24 bits of device ID SHALL be stored as `_dev24`
+- **AND** the base milliseconds since 2025 epoch SHALL be calculated and stored
+- **AND** a Stopwatch SHALL be started for elapsed time tracking
+- **AND** `_initialized` flag SHALL be set to true
+- **AND** subsequent calls to `init()` SHALL be ignored if already initialized
 
-#### Scenario: Counter implementation
+#### Scenario: ID generation with monotonic guarantee
 
-- **WHEN** `TX.getId()` is implemented
-- **THEN** it SHALL use a static BigInt counter
-- **AND** it SHALL compare current timestamp with counter value
-- **AND** it SHALL increment counter if timestamp is not greater
+- **WHEN** `TX.nextId()` is called
+- **THEN** `_initialized` SHALL be true (assertion if false)
+- **AND** physical milliseconds since 2025 SHALL be calculated: `_baseMsSince2025 + _sw.elapsedMilliseconds`
+- **AND** logical milliseconds SHALL be MAX(physicalMs, \_lastLogicalMs + 1) to ensure monotonicity
+- **AND** `_lastLogicalMs` SHALL be updated to logicalMs
+- **AND** mix40 SHALL be calculated as: `(logicalMs + (_dev24 << 16)) & 0xFFFF_FFFFFF`
+- **AND** the ID SHALL be returned as: `(mix40 << 24) | _dev24`
+- **AND** subsequent calls SHALL return strictly increasing values
 
+#### Scenario: Device ID encoding in ID
+
+- **WHEN** an ID is generated via `TX.nextId()`
+- **THEN** the lower 24 bits SHALL contain `_dev24` (last 24 bits of device ID)
+- **AND** the device ID SHALL be extractable using `GlobalIdDecoder.extractDev24(id64)`
+
+#### Scenario: UTC time extraction from ID
+
+- **WHEN** `TX.getUTC(id64)` is called (or `GlobalIdDecoder.getUTC(id64)`)
+- **THEN** the logical milliseconds SHALL be extracted from the ID
+- **AND** UTC DateTime SHALL be calculated as: `DateTime.fromMillisecondsSinceEpoch(1735689600000 + logicalMs, isUtc: true)`
+- **AND** the returned DateTime SHALL represent when the ID was generated
+
+### Requirement: GlobalIdDecoder Class
+
+The SDK SHALL provide a `GlobalIdDecoder` class for extracting information from generated IDs.
+
+The `GlobalIdDecoder` class SHALL:
+
+- Provide static methods for ID decoding
+- Extract device ID (24 bits) from an ID
+- Extract logical milliseconds from an ID
+- Calculate UTC DateTime from an ID
+
+#### Scenario: Extract device ID from ID
+
+- **WHEN** `GlobalIdDecoder.extractDev24(id64)` is called
+- **THEN** the lower 24 bits SHALL be extracted: `id64 & 0xFFF_FFF`
+- **AND** the value SHALL be returned as integer
+
+#### Scenario: Extract mix40 from ID
+
+- **WHEN** `GlobalIdDecoder.extractMix40(id64)` is called
+- **THEN** the upper 40 bits SHALL be extracted: `id64 >> 24`
+- **AND** the value SHALL be returned as integer
+
+#### Scenario: Extract logical milliseconds from ID
+
+- **WHEN** `GlobalIdDecoder.extractLogicalMs(id64)` is called
+- **THEN** dev24 SHALL be extracted first
+- **AND** mix40 SHALL be extracted
+- **AND** logical milliseconds SHALL be calculated as: `(mix40 - (dev24 << 16)) & 0xFFFF_FFFFFF`
+- **AND** the value SHALL be returned
+
+#### Scenario: Extract UTC DateTime from ID
+
+- **WHEN** `GlobalIdDecoder.getUTC(id64)` is called
+- **THEN** logical milliseconds SHALL be extracted
+- **AND** UTC DateTime SHALL be calculated: `DateTime.fromMillisecondsSinceEpoch(1735689600000 + logicalMs, isUtc: true)`
+- **AND** the DateTime SHALL be returned
+
+### Requirement: TX Class Constants
+
+The TX class SHALL define the following constants:
+
+- `_epoch2025Ms = 1735689600000` - Milliseconds since Unix epoch for January 1, 2025
+- `_MASK24 = 0xFFF_FFF` - Mask for 24 bits (device ID extraction)
+- `_MASK40 = 0xFFFF_FFFFFF` - Mask for 40 bits (logical milliseconds)
+
+#### Scenario: Constant values
+
+- **WHEN** TX class is used
+- **THEN** epoch constant SHALL be 1735689600000 milliseconds
+- **AND** MASK24 SHALL be 0xFFF_FFF (24 bits)
+- **AND** MASK40 SHALL be 0xFFFF_FFFFFF (40 bits)
+
+### Requirement: Primary Key Generation
+
+The SDK SHALL use TX class for generating primary keys in BEFORE INSERT triggers.
+
+Primary key generation SHALL:
+
+- Use TX class to generate IDs that encode device ID and timestamp
+- Generate primary key using formula in trigger: `pk = ((((DeviceID << 16) + mtds_client_ts) & 0xFFFFFFFFFF) << 24) | (DeviceID & 0xFFFFFF)`
+- Ensure primary keys are unique and monotonic
+- Support UTC time extraction from primary keys
+
+#### Scenario: Primary key generation in trigger
+
+- **WHEN** a row is inserted
+- **THEN** BEFORE INSERT trigger SHALL generate primary key using the formula
+- **AND** DeviceID SHALL be retrieved from state table
+- **AND** mtds_client_ts SHALL be retrieved/updated from state table
+- **AND** the generated primary key SHALL be set in NEW.pk
+- **AND** the primary key SHALL encode both device ID and client timestamp

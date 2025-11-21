@@ -4,6 +4,18 @@ The synchronization service provides bidirectional data synchronization between 
 
 ## Requirements
 
+### Requirement: Drift ORM Usage
+
+The SDK SHALL use Drift ORM as the primary method for all database queries in the sync service to ensure type safety and consistency.
+
+Sync service database operations SHALL:
+
+- Use Drift ORM methods as the default for querying user tables and `mtds_state` table
+- Use Drift's type-safe query builders for SELECT, INSERT, UPDATE operations
+- Use Drift's `INSERT OR REPLACE` semantics for idempotent updates
+- Use raw SQL queries only when Drift ORM cannot be used effectively (e.g., MAX() aggregations with complex conditions, performance limitations, or unsupported operations)
+- Ensure all queries are type-safe where possible and benefit from compile-time checking
+
 ### Requirement: Synchronization Service
 
 The SDK SHALL provide a synchronization service that uploads local changes to the server and receives updates using GraphQL operations.
@@ -25,16 +37,21 @@ The service SHALL:
 - **AND** the server SHALL return server-assigned `mtds_server_ts` values
 - **AND** local records SHALL be updated with `mtds_server_ts` values
 
-#### Scenario: Initial sync on app start
+#### Scenario: Initial sync on app start (SyncAllTables)
 
 - **WHEN** the app starts or comes online
-- **THEN** the service SHALL query all tables for their max `mtds_server_ts` (or `mtds_client_ts` if `mtds_server_ts` is NULL)
+- **THEN** the service SHALL send a `SyncAllTables` request to server
+- **AND** for each table, retrieve MAX(mtds_server_ts) from `mtds_state` table using Drift ORM WHERE Attribute = 'table:' + tableName
+- **AND** if no value exists in state table, query MAX(mtds_server_ts) from the user table using Drift ORM and store it in state table
 - **AND** send table names with max timestamps to server via GraphQL mutation
+- **AND** server SHALL check Redis cache to see if changes exist since last sync
+- **AND** if no changes in cache, server may query actual tables for the tenant
 - **AND** receive all updates where `mtds_server_ts > requested_timestamp`
 - **AND** the service SHALL check `mtds_device_id` for each received record
 - **AND** if `mtds_device_id` matches current device, the record SHALL be skipped (prevent loops)
 - **AND** if `mtds_device_id` differs, the record SHALL be applied to local database idempotently
 - **AND** update local records with server-assigned `mtds_server_ts` values
+- **AND** update state table with new MAX(mtds_server_ts) per table after sync completes
 
 #### Scenario: Debounce repeated offline/online transitions
 
@@ -62,60 +79,66 @@ The service SHALL:
 - **AND** if device ID matches, the update SHALL be ignored (prevent loops)
 - **AND** if device ID differs, the update SHALL be applied with `mtds_server_ts`
 
-### Requirement: Initial Sync Operation
+### Requirement: Initial Sync Operation (SyncAllTables)
 
-The SDK SHALL automatically perform initial sync when the app starts or comes online.
+The SDK SHALL automatically perform initial sync when the app starts or comes online using `SyncAllTables` request.
 
 Initial sync SHALL:
 
-- Query all user tables for their maximum `mtds_server_ts` (using `MAX(mtds_server_ts)` query)
-- Cache MAX values to avoid repeated queries (especially after hard deletes)
-- Send table names with max timestamps to server
+- Send `SyncAllTables` request to server with table names and MAX(mtds_server_ts) per table
+- Retrieve MAX timestamps from `mtds_state` table using Drift ORM (Attribute = 'table:' + tableName)
+- If timestamp doesn't exist in state table, query MAX(mtds_server_ts) from the user table using Drift ORM and store it
+- Server SHALL check Redis cache to see if changes exist since last sync
+- If no changes in cache, server may query actual tables for the tenant
 - Receive all updates where `mtds_server_ts > requested_timestamp`
 - Apply updates to local database idempotently
 - Update local records with server-assigned `mtds_server_ts` values
+- Update state table with new MAX(mtds_server_ts) per table after sync completes
 - Be idempotent (safe to call multiple times)
 
 #### Scenario: Initial sync on app start
 
 - **WHEN** the SDK is initialized
-- **THEN** initial sync SHALL be triggered automatically
-- **AND** all tables SHALL be queried for max `mtds_server_ts`
-- **AND** MAX values SHALL be cached
+- **THEN** initial sync SHALL be triggered automatically via `SyncAllTables` request
+- **AND** for each table, MAX timestamp SHALL be retrieved from `mtds_state` (Attribute = 'table:' + tableName)
+- **AND** if timestamp doesn't exist, it SHALL be queried from database and stored in state table
 - **AND** updates SHALL be fetched and applied
+- **AND** state table SHALL be updated with new MAX timestamps after sync
 
 #### Scenario: Initial sync on network reconnect
 
 - **WHEN** network connectivity is restored
 - **AND** there are pending changes or app was offline
-- **THEN** initial sync SHALL be triggered
-- **AND** cached MAX values SHALL be used if available
+- **THEN** initial sync SHALL be triggered via `SyncAllTables` request
+- **AND** MAX timestamps SHALL be retrieved from state table
 - **AND** updates since last sync SHALL be fetched
+- **AND** state table SHALL be updated with new MAX timestamps after sync
 
-### Requirement: MAX Timestamp Caching
+### Requirement: MAX Timestamp Storage in State Table
 
-The SDK SHALL cache the maximum `mtds_server_ts` value per table to avoid repeated database queries.
+The SDK SHALL store the maximum `mtds_server_ts` value per table in `mtds_state` table.
 
-Caching SHALL:
+Timestamp storage SHALL:
 
-- Store MAX timestamp per table in memory
-- Update cache when records are synced from server
-- Use cached values for initial sync queries
-- Invalidate cache appropriately (e.g., after hard deletes that might affect MAX)
+- Store MAX timestamp per table as `'table:' + tableName` attribute in state table
+- Use numValue column to store the BIGINT timestamp
+- Update state table when records are synced from server
+- Use stored values for initial sync queries
+- Query database only if timestamp doesn't exist in state table
 
-#### Scenario: Cache MAX timestamp
+#### Scenario: Store MAX timestamp in state table
 
-- **WHEN** initial sync queries MAX timestamp for a table
-- **THEN** the value SHALL be cached in memory
-- **AND** subsequent initial sync requests SHALL use cached value
-- **AND** cache SHALL be updated when new records with higher `mtds_server_ts` are received
+- **WHEN** sync completes for a table
+- **THEN** the MAX(mtds_server_ts) value SHALL be stored in `mtds_state` with Attribute `'table:' + tableName`
+- **AND** the value SHALL be stored in numValue column
+- **AND** this value SHALL be used for subsequent sync requests
 
-#### Scenario: Cache invalidation after hard delete
+#### Scenario: Retrieve MAX timestamp from state table
 
-- **WHEN** a hard delete occurs (bypassing MTDS)
-- **THEN** the MAX timestamp cache SHALL be invalidated for that table
-- **AND** next initial sync SHALL query MAX timestamp from database
-- **AND** cache SHALL be refreshed with new value
+- **WHEN** initial sync is performed
+- **THEN** the SDK SHALL use Drift ORM to query the `mtds_state` table WHERE Attribute = 'table:' + tableName
+- **AND** if value exists, it SHALL be used as the last known MAX(mtds_server_ts)
+- **AND** if value doesn't exist, database SHALL be queried and value SHALL be stored in state table
 
 ### Requirement: Soft Delete Hard Delete on Sync Back
 
@@ -124,7 +147,7 @@ When a soft-deleted record is received from the server (indicating server confir
 #### Scenario: Soft delete confirmation from server
 
 - **WHEN** a soft-deleted record is received from server via sync
-- **AND** the record has `mtds_deleted_ts` set
+- **AND** the record has `mtds_delete_ts` set
 - **AND** the record's `mtds_server_ts` is present
 - **THEN** the client SHALL perform a hard delete (permanent removal)
 - **AND** the record SHALL be removed from the local database
@@ -183,3 +206,32 @@ The SDK SHALL implement multiple safeguards to prevent infinite synchronization 
 - **AND** duplicate changes SHALL be skipped
 - **AND** duplicate detection SHALL use a sliding window (last 1000 changes) to prevent memory growth
 
+### Requirement: Server-Side Query Requirements
+
+The SDK SHALL document server-side requirements for query handling and indexing.
+
+Server-side requirements SHALL:
+
+- Add `AND mtds_delete_ts IS NULL` to all INSERT and UPDATE queries
+- Include `COALESCE(mtds_delete_ts, 0)` at the end of all UNIQUE indexes
+- Ensure soft-deleted records are excluded from normal queries
+- Support Redis cache for checking if changes exist since last sync
+
+#### Scenario: Server query filtering
+
+- **WHEN** server performs INSERT or UPDATE queries
+- **THEN** server SHALL add `AND mtds_delete_ts IS NULL` to all queries
+- **AND** soft-deleted records SHALL be excluded from normal operations
+
+#### Scenario: Server UNIQUE index handling
+
+- **WHEN** server creates UNIQUE indexes
+- **THEN** indexes SHALL include `COALESCE(mtds_delete_ts, 0)` at the end
+- **AND** soft-deleted records SHALL not violate UNIQUE constraints
+
+#### Scenario: Server Redis cache check
+
+- **WHEN** client sends `SyncAllTables` request with MAX(mtds_server_ts) per table
+- **THEN** server SHALL check Redis cache to see if changes exist since last sync
+- **AND** if no changes in cache, server may query actual tables for the tenant
+- **AND** server SHALL return all updates where `mtds_server_ts > requested_timestamp`
