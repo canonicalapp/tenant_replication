@@ -260,7 +260,7 @@ class MTDS_SDK {
       deviceId: deviceId,
     );
 
-    _deleteService = DeleteService(db: db, deviceId: deviceId);
+    _deleteService = DeleteService(db: db, recordHelper: recordHelper);
 
     _autoSyncService = AutoSyncService(db: db, syncService: _syncService);
   }

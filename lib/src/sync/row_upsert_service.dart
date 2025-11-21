@@ -176,6 +176,30 @@ class RowUpsertService {
           existing.isEmpty ? null : existing.first.data['txid'];
       final localTxid = BigIntUtils.toBigInt(localTxidRaw);
 
+      // Check if this is a soft delete update (mtds_delete_ts is set)
+      final deleteTs = BigIntUtils.toBigInt(row['mtds_delete_ts']);
+      final isSoftDelete = deleteTs != null;
+
+      // If soft delete, perform hard delete instead of upsert
+      if (isSoftDelete) {
+        try {
+          await db.customStatement(
+            'DELETE FROM $tableName WHERE $pkName = ?',
+            [pkValue],
+          );
+          print(
+            '   🗑️ Hard deleted (soft delete confirmed): $tableName[$pkName=$pkValue]',
+          );
+          // Count as upserted for summary
+          upserted++;
+          continue;
+        } catch (e) {
+          errors++;
+          print('   ❌ Error hard deleting $tableName[$pkName=$pkValue]: $e');
+          continue;
+        }
+      }
+
       // Skip if local timestamp is newer or equal (local wins)
       if (localTxid != null &&
           BigIntUtils.isGreaterOrEqual(localTxid, serverTxid)) {
